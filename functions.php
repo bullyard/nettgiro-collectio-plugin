@@ -578,8 +578,15 @@ function collectio_create_case_for_invoice($invoiceID, $uid) {
 
                                 // update the invoice with the sent_inkasso status
                                 q("update invoice set sent_inkasso = '2' where uid = '".$uid."' and id ='".$invoiceID."'");
+
+                                // change price for admin invoices
+                                if ($uid == CONF_ServiceProviderUID){
+                                    $price = 0;
+                                }else{
+                                    $price = CONF_priceCollectorFee;
+                                }	
                                 // register the service
-                                \log_service(CONF_priceCollectorFee, $uid, "Tjeneste: Sending av krav for ekstern oppfølging", $invoiceID, "collectio", "External ID: ".$receiptCase);
+                                \log_service($price, $uid, "Tjeneste: Sending av krav for ekstern oppfølging", $invoiceID, "collectio", "External ID: ".$receiptCase);
                                 // set the output message
                                 $result["status"] = "ok";
                                 $result["message"] = "Gratulerer! Saken har blitt sendt til oppfølging.";
@@ -621,3 +628,16 @@ function collectio_create_case_for_invoice($invoiceID, $uid) {
 // $objjjj->findInvoicesForAlert();
 
 
+/** PAGES */
+Pages::register_page('collectio_stats', $_SERVER['DOCUMENT_ROOT'].'/plugins/collectio/pages/stats.php');
+
+\Filter::add_filter('filter_add_admin_menu_element', 'collectio_filter_add_admin_menu_element_fn');
+function collectio_filter_add_admin_menu_element_fn($empty){
+    return '
+    <div class="dropdown-divider"></div>
+    <li>
+        <a class="dropdown-item" href="/?go=collectio_stats">
+            <i class="by-icon-push-pin" aria-hidden="true"></i>&nbsp;COLLECTIO STATS
+        </a>
+    </li>';
+}
