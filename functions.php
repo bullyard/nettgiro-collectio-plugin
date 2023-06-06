@@ -162,9 +162,9 @@ function outbox_invoice_sent_fn($invoiceObj, $uid){
         // check if the ref id is in queue for collection
         $invoiceRefID = $invoiceObj->get_property('creditNoteRefReal');
 
-        $isInQueue = Metadata::get('collectio_status_'.$invoiceRefID, $uid);
+        $collectionStatus = Metadata::get('collectio_status_'.$invoiceRefID, $uid);
         // deactivate
-        if (!empty($isInQueue) && $isInQueue == "queued"){
+        if (!empty($collectionStatus) && $collectionStatus == "queued"){
             Metadata::set('collectio_followup_'.$invoiceRefID, 0, $uid);
             Metadata::set('collectio_status_'.$invoiceRefID, 'canceled', $uid);
         }
@@ -177,7 +177,15 @@ function outbox_invoice_sent_fn($invoiceObj, $uid){
 /* after register company */
 $hooks->add_action('after_register_payment_success', 'collectio_after_register_payment_success_fn');
 function collectio_after_register_payment_success_fn($invoiceID, $uid){
+
+    // get status
+    $collectionStatus = Metadata::get('collectio_status_'.$invoiceID, $uid);
     
+    // do not change status if invoice has status completed
+    if ($collectionStatus == "completed"){
+        return;
+    }
+
     $remaining = invoice_remaining($invoiceID);
     if ($remaining == 0){
         Metadata::set('collectio_followup_'.$invoiceID, 0, $uid);
@@ -301,7 +309,7 @@ function override_options_fn($html){
             ";
             $output .= "
                 <div class='col-md-12'>
-                    <p><b>Saken blir automatisk overført ".CONF_collectio_days_before_deadline." dager etter forfall.</b><br>
+                    <p><b>Saken blir automatisk overført tidligst ".CONF_collectio_days_before_deadline." dager etter forfall.</b><br>
                     Hvis du vil hindre at saken blir fulgt opp, kan du gjøre en av følgende tre ting: </p>
                     <ol>
                     <li>Trykk på 'Avbryt oppfølging'-knappen</li>

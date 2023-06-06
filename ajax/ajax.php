@@ -142,7 +142,9 @@ if (is_numeric($uid) && $_SESSION['aid']){
 
         if (is_numeric($invoiceID)){
             Metadata::set('collectio_followup_'.$invoiceID, '0', $uid);
+            Metadata::set('collectio_status_'.$invoiceID,'canceled', $uid);
             echo json_encode(array('status'=>'ok'));
+            die();
         }
 
         echo json_encode(array('status'=>'failed'));
