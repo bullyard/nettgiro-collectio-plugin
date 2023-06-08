@@ -69,7 +69,7 @@ function collectio_invoice_option_checkbox_fn($uid, $invoiceType){
 
 $hooks->add_action('terms_page', 'collectio_terms_fn');
 function collectio_terms_fn(){
-    echo "<h5 class='pt-2 font-weight-normal'>Brukerbetingelser for Automatisk purring og inkasso via Collectio AS</h5>";
+    echo "<h5 class='pt-2 font-weight-normal' id='collectio-terms'>Brukerbetingelser for Automatisk purring og inkasso via Collectio AS</h5>";
     require_once('terms.php');
 };
 
@@ -140,15 +140,26 @@ function collectio_after_created_invoice_fn($invoiceid, $uid, $request){
 /* after register company */
 $hooks->add_action('register_company', 'collectio_register_company_fn');
 function collectio_register_company_fn($slug, $uid){
-    
-    // add to task manager
-    $taskManager = new TaskManager();
+    global $_REQUEST;
 
-    // Add a task to the queue
-    $taskDataObj = new stdClass();
-    $taskDataObj->uid = $uid;
-    $callback = 'collectio_task_create_creditor';
-    $taskManager->addTask($taskDataObj, $callback);
+     // get setting for forced or voluntary registration to collectio
+     $voluntary = Settings::get('collectio_voluntary_register_company');
+     
+    // Execute if the form was submitted with 'collection_service' checked as 1
+    // and if $voluntary is 1, or if $voluntary is not 1 regardless of the checkbox value.
+   if ($_REQUEST['collection_service'] == "1" && $voluntary == 1 || $voluntary != 1){
+    
+        // add to task manager
+        $taskManager = new TaskManager();
+
+        // Add a task to the queue
+        $taskDataObj = new stdClass();
+        $taskDataObj->uid = $uid;
+        $callback = 'collectio_task_create_creditor';
+        $taskManager->addTask($taskDataObj, $callback);
+    }else{
+        //debug("Collectio membership not added", 'user did not activate collection service checkbox, or voluntary setting is not 1');
+    }
 
 }
 
@@ -292,8 +303,8 @@ function collectio_filter_invoice_title_fn($html){
 }
 
 
-\Filter::add_filter('filter_overdue_options', 'override_options_fn');
-function override_options_fn($html){
+\Filter::add_filter('filter_overdue_options', 'collectio_override_options_fn');
+function collectio_override_options_fn($html){
     global $row, $uid;
     // check if invoice has been tagged for processing
     $isInQueue = Metadata::get('collectio_status_'.$row['id'], $uid);
@@ -359,8 +370,8 @@ function override_options_fn($html){
 }
 
 
-\Filter::add_filter('filter_processing_overdue', 'override_output_inkasso_sent_fn');
-function override_output_inkasso_sent_fn($html){
+\Filter::add_filter('filter_processing_overdue', 'collectio_override_output_inkasso_sent_fn');
+function collectio_override_output_inkasso_sent_fn($html){
     global $uid, $row;
 
     $invoiceID = $row['id'];
@@ -415,12 +426,36 @@ function override_output_inkasso_sent_fn($html){
     return $html;   
 }
 
-\Filter::add_filter('filter_html_price_list', 'filter_html_price_list_fn');
-function filter_html_price_list_fn($html){
+\Filter::add_filter('filter_html_price_list', 'collectio_filter_html_price_list_fn');
+function collectio_filter_html_price_list_fn($html){
     // add price for inkasso in the list
     $Added = "<li>".CONF_priceCollectorFee.".- kr for oevrføring til purring/inkasso via partner</li>";
     $html = str_replace( '</ul>', $Added."</ul>", $html);
     return $html;
+}
+
+
+\Filter::add_filter('filter_more_options_in_create_company', 'collectio_filter_more_options_in_create_company_fn');
+function collectio_filter_more_options_in_create_company_fn($html){
+
+    // get setting for forced or voluntary registration to collectio
+    $voluntary = Settings::get('collectio_voluntary_register_company');
+    if ($voluntary == "1"){
+       
+        return "<label class='mt-4 w-100'><strong>Automatisk purring/inkasso</strong></label>
+        <hr class=' mt-0'>
+        <!-- Invoice -->
+        <div class='form-group form-row '>
+            <div class='col-auto'>
+                <div class='custom-control custom-checkbox'>
+                    <input type='checkbox' class='custom-control-input' id='collection_service' name='collection_service' value='1'>
+                    <label class='custom-control-label' for='collection_service'>Knytt foretaket med <a href='/terms/#added-terms' target='_blank'>Collectio AS</a> for oppfølging av forfalte faktura. Du kan alltids deaktivere integrasjonen på ettertid.</label>
+                </div>
+            </div>
+        </div>";
+    }
+
+    return "";
 }
 
 
