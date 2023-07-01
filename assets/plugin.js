@@ -96,49 +96,77 @@ $(function() {
             $('#collectio_show_price').hide();
         }
     });
+
+
+    $('body').on('click', '#btnStopCollection', function(event) {
+        event.preventDefault();
+        $.fn.dialogue({
+            title: "Avbryt automatisk oppfølging",
+            content: $("<div />").attr('id','createGroupDialog').html('<div style="padding:30px;text-align:center;">Er du sikker på at faktura ikke skal bli automatisk fulgt opp etter forfall ved manglende betaling?</div>'),
+            closeIcon: true,
+            buttons: [
+                { text: "JA", id: $.utils.createUUID(), click: function ($modal) {
+
+                $.ajax({
+                    url: '/plugins/collectio/ajax/ajax.php',
+                    type: 'GET',
+                    dataType: 'json',
+                    data: $('#btnStopCollection').data('params')
+                })
+                .done(function(data) {
+                    $modal.dismiss();
+                    top.location.href = location.href;
+                });
+
+
+                } },
+                { text: "NEI", id: $.utils.createUUID(), click: function ($modal) { $modal.dismiss(); } }
+            ]
+        }).on('shown.bs.modal', function (e) {
+
+        }).on('hidden.bs.modal', function (e) {
+            $('#createGroupDialog').remove();
+        });
+    });
     
 });
 
 function invoice_sendToCollection(formID, url) {
 
     $.fn.confirm("Ønsker du å sende saken for oppfølging. ", (ans) => {
-    if (ans) {
-        show_loader();
+        if (ans) {
+            show_loader();
 
-        $.ajax({
-            url: url,
-            type: 'GET',
-            dataType: 'JSON',
-            data: $(formID).serializeArray(),
-            beforeSend: function() {
-                $(formID).prop('disabled', true);
-            }
-        })
-        .done(function(jsondata) {
+            $.ajax({
+                url: url,
+                type: 'GET',
+                dataType: 'JSON',
+                data: $(formID).serializeArray(),
+                beforeSend: function() {
+                    $(formID).prop('disabled', true);
+                }
+            })
+            .done(function(jsondata) {
 
-            hide_loader();
+                hide_loader();
 
-            if (jsondata.status == "error") {
-                $.fn.alert(jsondata.message);
+                if (jsondata.status == "error") {
+                    $.fn.alert(jsondata.message);
 
-            }else if (jsondata.status == "ok") {
+                }else if (jsondata.status == "ok") {
 
-                $.fn.alert(jsondata.message, 'Velykket', function(){top.location.href = location.href});
-            
-            } else if (jsondata.internal) {
-                $.fn.alert(jsondata.internal);
-            }
+                    $.fn.alert(jsondata.message, 'Velykket', function(){top.location.href = location.href});
+                
+                } else if (jsondata.internal) {
+                    $.fn.alert(jsondata.internal);
+                }
 
-        }).always(function() {
-            $(formID).prop('disabled', false);
-        });
+            }).always(function() {
+                $(formID).prop('disabled', false);
+            });
 
-    return false;
-       
-    }
-});   
-
-	
-
-
+        return false;
+        
+        }
+    });   
 }

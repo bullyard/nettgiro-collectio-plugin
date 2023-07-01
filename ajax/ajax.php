@@ -148,6 +148,24 @@ if (is_numeric($uid) && $_SESSION['aid']){
         }
 
         echo json_encode(array('status'=>'failed'));
+
+    }else if ($req=="delete_case"){
+        // get invoice id from hash
+        $invoiceHash = $_REQUEST['hash'];
+        $invoiceID = Invoice::get_id_by_hash($invoiceHash);
+        $key = $_REQUEST['key'];
+
+        if (md5($invoiceHash.CONF_hashKey) == $key){
+
+            if (is_numeric($invoiceID)){
+                Metadata::delete('collectio_followup_'.$invoiceID, $uid);
+                Metadata::delete('collectio_status_'.$invoiceID, $uid);
+                echo json_encode(array('status'=>'ok'));
+                die();
+            }
+        }
+      
+        echo json_encode(array('status'=>'failed'));
        
         
     }else{

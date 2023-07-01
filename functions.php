@@ -4,7 +4,7 @@
 // return will stop processing preceding code and will allow other functions.php to run if found by the Plugin class. exit() will stop the whole script.
 if (CONF_collectio_enable !== true) return;
 
-require_once dirname(dirname(__FILE__)) ."/collectio/class/CollectioInvoiceProcess.class.php";
+require_once dirname(__DIR__) ."/collectio/class/CollectioInvoiceProcess.class.php";
 
 use Bullyard\Predator\GetInvoiceRemainingAmountByClientAndInvoiceNumber;
 use Bullyard\Predator\PredatorAddCreditor;
@@ -228,6 +228,30 @@ function collectio_reminder_resend_invoice_validation_fn($uid, $row){
 
 
 /* FILTERS */
+
+
+\Filter::add_filter('filter_action_buttons_array', 'collectio_filter_action_buttons_array_fn');
+function collectio_filter_action_buttons_array_fn($array){
+	global $uid, $row;
+	
+	$invoiceID = $row['id'];
+	$inkassoStatus = \metadata::get('collectio_status_'.$invoiceID, $uid); 
+	if ($row['sent_inkasso']==0 && $inkassoStatus == 'queued'){
+
+		$btnParams = array(
+			'hash'=>$row['hash'],
+			'key'=>md5($row['hash'].CONF_hashKey),
+			'req'=>'delete_case'
+        );
+
+		$array['invoiceBased']['stop'] = icon_button("#" ,"Avbryt oppfølging", "remove", "btn btn-danger btn-icon btn-block text-left","", "btnStopCollection", $btnParams);
+
+		  
+	}
+		
+	return $array;
+    
+}
 
 
 \Filter::add_filter('filter_invoice_title', 'collectio_filter_invoice_title_fn');
@@ -560,6 +584,7 @@ function collectio_create_creditor(int $uid){
 
         // send email 
         send_mail("collectio", CONF_collectio_email, "Ny kreditor #".$creditorID, $body);
+        send_mail("collectio", CONF_collectio_email_contact, "Ny kreditor #".$creditorID." (kopi)", $body);
 
         return $creditorID;  
     }else{
@@ -623,7 +648,7 @@ function collectio_create_case_for_invoice($invoiceID, $uid) {
                                 q("update invoice set sent_inkasso = '2' where uid = '".$uid."' and id ='".$invoiceID."'");
 
                                 // change price for admin invoices
-                                if ($uid == CONF_ServiceProviderUID){
+                                if ($uid == CONF_serviceProviderUID){
                                     $price = 0;
                                 }else{
                                     $price = CONF_priceCollectorFee;
