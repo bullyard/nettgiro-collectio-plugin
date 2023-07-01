@@ -22,3 +22,7 @@ composer.lock
 # vendor
 public/vendor
 vendor/
+
+# auto generated files
+*.min.css
+*.min.js
