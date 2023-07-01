@@ -53,7 +53,7 @@ class CollectioInvoiceProcess {
             
         }
         
-        $subHTML = "";
+      
        
         foreach ($emailList as $uid => $row) {
 
@@ -64,6 +64,8 @@ class CollectioInvoiceProcess {
             // echo "<pre>";
             // var_dump($row);
             // die();
+
+            $subHTML = "";
            
             setlocale(LC_TIME, 'no_NO'); // Set the locale to Norwegian
             // generate list
@@ -129,6 +131,14 @@ class CollectioInvoiceProcess {
                 set('HTML', $html)->
                 set_recipient($userinfo['email'] ,$userinfo['name'])->
                 send($subject);
+
+                // $mailer = new \TemplateMailer($uid, 'company', "mail_template_empty", true);
+                // $mailer->
+                // set('PRETITLE', "Varsel om")->
+                // set('TITLE', $title)->
+                // set('HTML', $html)->
+                // set_recipient('perez@bullyard.no' ,'Rodrigo Perez')->
+                // send($subject);
 
                 echo "SENDING OK <br>";
 
