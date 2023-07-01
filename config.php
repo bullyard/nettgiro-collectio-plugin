@@ -1,6 +1,6 @@
 <?php
 
-define('CONF_collectio_enable', true);
+if (!defined('CONF_collectio_enable')) define('CONF_collectio_enable', true);
 
 
 // used to determine if user har accepted terms when registering
@@ -13,6 +13,7 @@ define('CONF_collectio_deny_manual_before_deadline', true); // does not allow se
 // define predator vartiables DEV
 if (CONF_is_dev){
     define('CONF_collectio_email', 'perez@bullyard.no');
+    define('CONF_collectio_email_contact', 'perez@bullyard.no');
     define('PREDATOR_WDSL', 'https://131117.web-site.no/CustomerServiceTest/CustomerService.asmx?WSDL');
     define('PREDATOR_AUTH_UID', 'TestKreditor');
     define('PREDATOR_AUTH_PW', 'U2PAqdprT95Ds6hk');
@@ -22,6 +23,7 @@ if (CONF_is_dev){
 }else{
     // production
     define('CONF_collectio_email', 'rune@collectio.no');
+    define('CONF_collectio_email_contact', 'kontakt@collectio.no');
     define('PREDATOR_WDSL', 'https://131117.web-site.no/customerservice/CustomerService.asmx?WSDL');
     define('PREDATOR_AUTH_UID', 'BullyardServices');
     define('PREDATOR_AUTH_PW', 'jBrD2Qwx7f7TBGjVX');
