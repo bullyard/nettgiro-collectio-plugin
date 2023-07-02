@@ -139,29 +139,62 @@ if (is_numeric($uid) && $_SESSION['aid']){
         // get invoice id from hash
         $invoiceHash = $_REQUEST['hash'];
         $invoiceID = Invoice::get_id_by_hash($invoiceHash);
+        $invoiceUID = Invoice::get_uid_by_hash($invoiceHash);
 
-        if (is_numeric($invoiceID)){
-            Metadata::set('collectio_followup_'.$invoiceID, '0', $uid);
-            Metadata::set('collectio_status_'.$invoiceID,'canceled', $uid);
-            echo json_encode(array('status'=>'ok'));
-            die();
+        if ($invoiceUID === $uid){
+
+            if (is_numeric($invoiceID)){
+                Metadata::set('collectio_followup_'.$invoiceID, '0', $uid);
+                Metadata::set('collectio_status_'.$invoiceID,'canceled', $uid);
+                echo json_encode(array('status'=>'ok'));
+                die();
+            }
         }
 
         echo json_encode(array('status'=>'failed'));
 
+    }else if ($req=="queue_case"){
+        // get invoice id from hash
+        $invoiceHash = $_REQUEST['hash'];
+        $invoiceID = Invoice::get_id_by_hash($invoiceHash);
+        $invoiceUID = Invoice::get_uid_by_hash($invoiceHash);
+
+        if ($invoiceUID === $uid){
+
+            // allow only if terms has been accepted, id is provided when terms are accepted
+            $creditorID = Metadata::get('collectio_creditor_id', $uid);  
+            if (is_numeric($creditorID)){
+
+                if (is_numeric($invoiceID)){
+                    Metadata::set('collectio_followup_'.$invoiceID, 1, $uid);
+                    Metadata::set('collectio_status_'.$invoiceID,'queued', $uid);
+                    echo json_encode(array('status'=>'ok'));
+                    die();
+                }
+            }
+        }
+
+        echo json_encode(array('status'=>'failed'));
+
+    
     }else if ($req=="delete_case"){
         // get invoice id from hash
         $invoiceHash = $_REQUEST['hash'];
         $invoiceID = Invoice::get_id_by_hash($invoiceHash);
+        $invoiceUID = Invoice::get_uid_by_hash($invoiceHash);
+        
         $key = $_REQUEST['key'];
 
-        if (md5($invoiceHash.CONF_hashKey) == $key){
+        if ($invoiceUID === $uid){
 
-            if (is_numeric($invoiceID)){
-                Metadata::delete('collectio_followup_'.$invoiceID, $uid);
-                Metadata::delete('collectio_status_'.$invoiceID, $uid);
-                echo json_encode(array('status'=>'ok'));
-                die();
+            if (md5($invoiceHash.CONF_hashKey) == $key){
+
+                if (is_numeric($invoiceID)){
+                    Metadata::delete('collectio_followup_'.$invoiceID, $uid);
+                    Metadata::delete('collectio_status_'.$invoiceID, $uid);
+                    echo json_encode(array('status'=>'ok'));
+                    die();
+                }
             }
         }
       

@@ -97,35 +97,41 @@ $(function() {
         }
     });
 
-
-    $('body').on('click', '#btnStopCollection', function(event) {
+    $('body').on('click', '#btnToggleCollection', function(event) {
         event.preventDefault();
-        $.fn.dialogue({
-            title: "Avbryt automatisk oppfølging",
-            content: $("<div />").attr('id','createGroupDialog').html('<div style="padding:30px;text-align:center;">Er du sikker på at faktura ikke skal bli automatisk fulgt opp etter forfall ved manglende betaling?</div>'),
-            closeIcon: true,
-            buttons: [
-                { text: "JA", id: $.utils.createUUID(), click: function ($modal) {
-
-                $.ajax({
-                    url: '/plugins/collectio/ajax/ajax.php',
-                    type: 'GET',
-                    dataType: 'json',
-                    data: $('#btnStopCollection').data('params')
-                })
-                .done(function(data) {
-                    $modal.dismiss();
-                    top.location.href = location.href;
-                });
-
-
-                } },
-                { text: "NEI", id: $.utils.createUUID(), click: function ($modal) { $modal.dismiss(); } }
-            ]
-        }).on('shown.bs.modal', function (e) {
-
-        }).on('hidden.bs.modal', function (e) {
-            $('#createGroupDialog').remove();
+        const $btn = $('#btnToggleCollection'); // Cache the button jQuery object
+        const btnData = $btn.data('params');
+        let serviceState = btnData.service_is_active; // get service state from the button data-params
+        
+        // Set the 'req' value and execute the AJAX call
+        btnData.req = serviceState ? 'delete_case' : 'queue_case'; 
+    
+        $.ajax({
+            url: '/plugins/collectio/ajax/ajax.php',
+            type: 'GET',
+            dataType: 'json',
+            data: btnData
+        })
+        .done(function(data) {
+            if(data.status === 'ok') {
+                serviceState = !serviceState;
+                btnData.service_is_active = serviceState; // update service status in button data-params
+                
+                if(serviceState) {
+                    $.fn.alert('<center>Tjenesten er nå PÅ<br><em><small>Merk at dette er en betalt tjeneste. Dersom saken blir overført for ekstern oppfølging vil det påløpe overføringskostnad på NOK 35.-</small></em></center>');
+                    $btn.removeClass('btn-danger').addClass('btn-success'); // switch class to btn-success
+                    
+                    $(".action-text").text(" Oppfølging: PÅ");
+                } else {
+                    $.fn.alert('Tjenesten er nå AV');
+                    $btn.removeClass('btn-success').addClass('btn-danger'); // switch class to btn-danger
+                    $(".action-text").text(" Oppfølging: AV");
+                }
+    
+            } else if (data.status === 'failed') {
+                $.fn.alert('En feil oppstod. Vennligst prøv igjen.');
+            }
+            //top.location.href = location.href;
         });
     });
     
