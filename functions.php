@@ -246,38 +246,42 @@ function collectio_filter_action_buttons_array_fn($array){
 
         if ($acceptedTerms !== false){
 
-            if ($row['sent_inkasso']==0){
+            // check if invoice status is not payed
+            if ($row['status'] != 'payed'){
 
-                // check if CONF_collectio_days_before_deadline has passed after invoice due date
-                $dueDate = $row['duedate'];
-                $daysBeforeDeadline = CONF_collectio_days_before_deadline;
-                $deadline = date('Y-m-d', strtotime($dueDate. ' + '.$daysBeforeDeadline.' days'));
-                $today = date('Y-m-d');
-                $todayTimestamp = strtotime($today);
-                $deadlineTimestamp = strtotime($deadline);
+                if ($row['sent_inkasso']==0){
 
-                if ($todayTimestamp < $deadlineTimestamp){
-                   
-                    if ($inkassoStatus == 'queued'){
+                    // check if CONF_collectio_days_before_deadline has passed after invoice due date
+                    $dueDate = $row['duedate'];
+                    $daysBeforeDeadline = CONF_collectio_days_before_deadline;
+                    $deadline = date('Y-m-d', strtotime($dueDate. ' + '.$daysBeforeDeadline.' days'));
+                    $today = date('Y-m-d');
+                    $todayTimestamp = strtotime($today);
+                    $deadlineTimestamp = strtotime($deadline);
 
-                        $btnParams = array(
-                            'hash'=>$row['hash'],
-                            'key'=>md5($row['hash'].CONF_hashKey),
-                            'req'=>'delete_case',
-                            'service_is_active' => true
-                        );
-            
-                        $array['invoiceBased']['stop'] = icon_button("#" ,"<span class='action-text'>Oppfølging: PÅ</span>", "time", "btn btn-success btn-icon btn-block text-left","", "btnToggleCollection", $btnParams);
-                        
-                    }else{
-                        $btnParams = array(
-                            'hash'=>$row['hash'],
-                            'key'=>md5($row['hash'].CONF_hashKey),
-                            'req'=>'queue_case',
-                            'service_is_active' => false
-                        );
-            
-                        $array['invoiceBased']['stop'] = icon_button("#" ,"<span class='action-text'>Oppfølging: AV</span>", "time", "btn btn-danger btn-icon btn-block text-left","", "btnToggleCollection", $btnParams);
+                    if ($todayTimestamp < $deadlineTimestamp){
+                    
+                        if ($inkassoStatus == 'queued'){
+
+                            $btnParams = array(
+                                'hash'=>$row['hash'],
+                                'key'=>md5($row['hash'].CONF_hashKey),
+                                'req'=>'delete_case',
+                                'service_is_active' => true
+                            );
+                
+                            $array['invoiceBased']['stop'] = icon_button("#" ,"<span class='action-text'>Oppfølging: PÅ</span>", "time", "btn btn-success btn-icon btn-block text-left","", "btnToggleCollection", $btnParams);
+                            
+                        }else{
+                            $btnParams = array(
+                                'hash'=>$row['hash'],
+                                'key'=>md5($row['hash'].CONF_hashKey),
+                                'req'=>'queue_case',
+                                'service_is_active' => false
+                            );
+                
+                            $array['invoiceBased']['stop'] = icon_button("#" ,"<span class='action-text'>Oppfølging: AV</span>", "time", "btn btn-danger btn-icon btn-block text-left","", "btnToggleCollection", $btnParams);
+                        }
                     }
                 }
             }
