@@ -1,14 +1,27 @@
 <?php
 
-error_reporting(E_ALL & ~E_NOTICE);
+error_reporting(E_ALL & ~E_NOTICE & ~E_DEPRECATED);
 ini_set('display_errors', '1');
-ini_set('zlib.output_compression', false);
-putenv('no-gzip=1'); // apache_setenv('no-gzip', '1'); <- apache_setenv() is only available when running PHP as an Apache module. If you're running PHP using a different SAPI (Server Application Programming Interface), such as CGI or FastCGI, this function may not be available.
+ini_set('display_startup_errors', 1);
+ini_set('max_execution_time', 0);
+set_time_limit(0);
 
-echo "[".date('Y-m-d H:i:s')."]<br>\n";
+ini_set('zlib.output_compression', 0);
+ini_set('output_buffering', 'Off');
+ini_set('output_handler', '');
+ini_set('implicit_flush', 1);
 
 include_once($_SERVER['DOCUMENT_ROOT']."/config/config.php");
 include_once($_SERVER['DOCUMENT_ROOT']."/func/fpdf_func.php");
+
+header('X-Accel-Buffering: no');
+//header('Content-Encoding: none;');
+header('Content-Encoding: none;');
+
+ob_implicit_flush(1);
+echo "[".date('Y-m-d H:i:s')."]<br>\n";
+ob_end_clean();
+
 
 //  check if plugin is active
 if (CONF_collectio_enable === false) exit('Plugin is not enabled');
@@ -31,4 +44,6 @@ $obj->findInvoicesForAlert();
 $obj->processCaseStatusAll();
 
 
+// Flush (send) the output buffer and turn off output buffering
+ob_end_flush();
 

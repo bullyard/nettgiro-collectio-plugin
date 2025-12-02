@@ -6,6 +6,7 @@
 * 2. processing = processing is when the invoice has aready been sent to collectio
 * 3. completed =  finished is when collectio has completed the collection, either by collecting the debt or not. So when the case is finished no matter the outcome
 * 4. cancelled = canceled, can be set when the used cancels the invoice while it is in queue
+* 5. recall = recall, can be set when the used recalls the invoice while it is in queue
 */
 
 /**
@@ -22,6 +23,8 @@ use Bullyard\Predator\GetInvoiceRemainingAmountByClientAndInvoiceNumber;
 use Bullyard\Predator\GetCaseInvoicesByCaseNumber;
 use Bullyard\Predator\PredatorAddCreditor;
 use Bullyard\Predator\PredatorCaseImport;
+use Bullyard\Predator\ExportPaymentsByFilter;
+use Bullyard\Predator\PredatorRecallCase;
 
 class CollectioInvoiceProcess {
 
@@ -101,6 +104,8 @@ class CollectioInvoiceProcess {
                     $subHTML .="</td>";
                 $subHTML .="</tr>";
 
+                \LogInvoiceActions::add($uid, $l['id'], 'Collectio email notice sent', $userinfo['email']);
+
             }
             $subHTML .="</table></div>";
             
@@ -110,8 +115,8 @@ class CollectioInvoiceProcess {
             </div>";
             $html .= $subHTML;
             $html .= "<div style='-ms-text-size-adjust: none; -webkit-text-size-adjust: none; font-size: 15px; font-weight: 300; line-height: 24px; padding: 10px; text-size-adjust: none;'>
-            For å unngå unødvendige kostnader, registrer innbetaling på fakturaer som er betalt. Er ikke den/de betalt, trenger du ikke å gjøre noe da de vil bli automatisk sendt for oppfølging. 
-            <br><br>Hvis du vil hindre at en faktura går til oppfølging (Purring/Inkasso), kan du avbryte oppfølgingen ved å gå til fakturaen og klikke på 'Purring' og deretter på 'Avbryt oppfølging'. 
+            ⚠️ For å unngå unødvendige kostnader, registrer innbetaling på fakturaer som er betalt. Er ikke den/de betalt, trenger du ikke å gjøre noe da de vil bli automatisk sendt for oppfølging. 
+            <br><br>Hvis du vil hindre at en faktura går til oppfølging (Purring/Inkasso), kan du avbryte oppfølgingen ved å gå til fakturaen, klikke på 'Purring' og deretter på 'Avbryt oppfølging'. 
             Hvis hele beløpet blir kreditert på en faktura, vil det også hindre fakturaen fra å gå til oppfølging. Hvis du er usikker på hva du skal gjøre, kan du kontakte vår support for hjelp.
             <br><br><br>
             Med vennlig hilsen,<br>
@@ -130,7 +135,7 @@ class CollectioInvoiceProcess {
                 set('TITLE', $title)->
                 set('HTML', $html)->
                 set_recipient($userinfo['email'] ,$userinfo['name'])->
-                send($subject);
+                send("");
 
                 // $mailer = new \TemplateMailer($uid, 'company', "mail_template_empty", true);
                 // $mailer->
@@ -159,12 +164,19 @@ class CollectioInvoiceProcess {
     
     public function findInvoicesForCollection() {
 
+         // Start the output buffering to avoid timeout issues
+         ob_start();
+
         echo "<h1>".__FUNCTION__."</h1>\n";
 
         $query = $this->produceQuery(self::DEADLINE, 2);
         $invoices = self::$db->q($query);
-      
+
+        // Start the timer
+        $start = microtime(true);
         while ($invoice = self::$db->mfa($invoices)) {
+
+            echo "Iteration created:<br>\n";
 
             $invoiceID = $invoice['id']; 
             $uid = $invoice['uid'];
@@ -200,7 +212,45 @@ class CollectioInvoiceProcess {
                 debug('Function: '.__FUNCTION__.'("'.$invoiceID.'", "'.$uid.'")', "Execution time: ".$execution_time." \nReturned: ".$output['message']);
             }
 
+            echo "Iteration ended<br>\n";
+
+            $str =  ob_get_clean();
+            echo $str;
+            ob_flush();
+            flush();
+
         }
+
+        // End the timer
+        $end = microtime(true);
+        $time = round($end - $start, 2);
+
+        echo "Total time: $time seconds<br>\n";
+
+        // End the output buffering
+        ob_end_flush();
+    }
+
+
+    /**
+     * Checks the status of an invoice by its number 
+     *
+     * @param int $caseNO The number of the invoice to check.
+     *
+     * @return array|false The remaining amount of the invoice as a float if it exists and is numeric, or false otherwise.
+     */
+    public function getCaseStatus(string $caseNO) {
+
+        if (!empty($caseNO) && strlen($caseNO) < 10){
+
+            $obj = new GetCaseInvoicesByCaseNumber();
+            $val = $obj->getInitialAndRemainingBalanace($caseNO);
+            
+            if (is_array($val)){
+                return $val;
+            } 
+        }
+        return false;
     }
 
 
@@ -211,12 +261,12 @@ class CollectioInvoiceProcess {
      *
      * @return array|false The remaining amount of the invoice as a float if it exists and is numeric, or false otherwise.
      */
-    public function getCaseStatus(int $caseNO) {
+    public function getCaseStatus2(string $caseNO, $creditorID) {
 
-        if (is_numeric($caseNO)){
+        if (!empty($caseNO) && strlen($caseNO) < 10){
 
-            $obj = new GetCaseInvoicesByCaseNumber();
-            $val = $obj->getInitialAndRemainingBalanace($caseNO);
+            $obj = new ExportPaymentsByFilter();
+            $val = $obj->getStatuses($caseNO, $creditorID);
             
             if (is_array($val)){
                 return $val;
@@ -318,13 +368,13 @@ class CollectioInvoiceProcess {
 
                 $userinfo = Bullyard\Invoice\Invoice::get_user($invoice['uid']); // Get company information
                 try {
-                    $mailer = new \TemplateMailer($uid, 'company', "mail_template_empty", true);
+                    $mailer = new \TemplateMailer($invoice['uid'], 'company', "mail_template_empty", true);
                     $mailer->
                     set('PRETITLE', "")->
                     set('TITLE', "Krav på faktura #".$invoice['invoiceid']." er avsluttet")->
                     set('HTML', $html)->
                     set_recipient($userinfo['email'] ,$userinfo['name'])->
-                    send($subject);
+                    send("");
 
                 } catch (\Exception $e) {
                     echo "Intern error: ".$e->getMessage()."<br>";
@@ -336,9 +386,11 @@ class CollectioInvoiceProcess {
                 Metadata::set('collectio_status_'.$invoice['id'], 'completed', $invoice['uid']);
                 echo "Successfully updated case ".$invoice['caseNO']." invoice to completed, invoice id = ".$invoice['id']." hash = ".$invoice['hash']." <br>";
 
+                \LogInvoiceActions::add($invoice['uid'], $invoice['id'], 'Collectio case completed', '');
+
             }else{
                 // nothing has happened yet
-                echo "No invoice status -> ".var_export($apiResult, true)." - ".var_export((float) 0, true)."<br>";
+                echo "No invoice status (".$invoice['caseNO'].") -> ".var_export($apiResult, true)." - ".var_export((float) 0, true)."<br>";
             }
 
             // Flush the output buffer to avoid timeout issues
@@ -351,6 +403,14 @@ class CollectioInvoiceProcess {
     }  
 
     private function produceQuery(int $deadlineDays = self::DEADLINE, int $FollowUpStage = 1) : string { 
+
+        // mm.metakey in query only when followupstage is 3
+        if ($FollowUpStage == 3){
+            $addSql = "AND mm.meta_key IS NOT NULL";
+        }else{
+            $addSql = "";
+        }
+
         return "SELECT 
                 i.*
             FROM
@@ -370,7 +430,7 @@ class CollectioInvoiceProcess {
                     AND i.duedate < DATE_SUB(NOW(), INTERVAL $deadlineDays DAY)
                     AND icheck.id IS NULL
                     AND m.meta_key IS NOT NULL
-                    AND mm.meta_key IS NULL
+                    ".$addSql."
             GROUP BY i.id";
     }
     

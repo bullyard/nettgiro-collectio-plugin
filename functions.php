@@ -1,5 +1,6 @@
 <?php
 
+// version 1.0.0
 
 // return will stop processing preceding code and will allow other functions.php to run if found by the Plugin class. exit() will stop the whole script.
 if (CONF_collectio_enable !== true) return;
@@ -11,10 +12,13 @@ use Bullyard\Predator\PredatorAddCreditor;
 use Bullyard\Predator\PredatorCaseImport;
 
 
+
 /* HOOKS */
 
 $hooks->add_action('invoice_option_checkbox', 'collectio_invoice_option_checkbox_fn');
 function collectio_invoice_option_checkbox_fn($uid, $invoiceType){
+
+    $CONF_collection_fee = \SubscriptionChecker::get_service_pricing($uid, 'collector_fee');
     
     if ($invoiceType == 1){
         // check if user has accepted terms
@@ -29,7 +33,7 @@ function collectio_invoice_option_checkbox_fn($uid, $invoiceType){
         }
 
         ?>
-        <div class="col-form-label col-12 col-sm-8  pl-4 offset-sm-4 custom-control custom-checkbox">
+        <div class="col-form-label custom-control custom-checkbox">
             <input type="checkbox" name="collectionService" id="collectionService" class="custom-control-input"
                 value='1' <?=($acceptedTerms?"":"disabled='disabled'")?> <?=$isChecked?> />
             <label class="custom-control-label" for="collectionService">
@@ -44,10 +48,10 @@ function collectio_invoice_option_checkbox_fn($uid, $invoiceType){
             <div class="form-group form-row mb-0" id="collectionServiceInfo">
                 <?php 
                     if ($acceptedTerms !== false){
-                        if (CONF_priceCollectorFee > 0){ ?>
-                        <div class="col-12 mt-2">
+                        if ($CONF_collection_fee['price'] > 0){ ?>
+                        <div class="col mr-3 mt-2">
                             <?php
-                                (new AlertHelper('Automatisk purring og inkasso', 'Pris: NOK <strong>'.CONF_priceCollectorFee.'.-</strong> <small>eks. MVA</small> for tjenesten når saken blir overført til partner.', false))->icon('!')->id('collectio_show_price')->type('red')->alert(true);
+                                (new AlertHelper('Automatisk purring og inkasso', 'Pris: NOK <strong>'.$CONF_collection_fee['price'].'.-</strong> <small>eks. MVA</small> for tjenesten når saken blir overført til partner.', false))->icon('!')->id('collectio_show_price')->type('red')->alert(true);
                             ?>
                         </div>
                     <?php 
@@ -76,6 +80,7 @@ function collectio_terms_fn(){
 $hooks->add_action('reminder_option_top', function(){
     global $uid;
     $acepptedTerms = \Metadata::get('collectio_terms', $uid);
+    $CONF_collection_fee = \SubscriptionChecker::get_service_pricing($uid, 'collector_fee');
 
     echo "<div class='custom-control custom-radio'>
             <input id='radioCollect' autocomplete='off' type='radio' name='sendingMethod' value='collection' class='custom-control-input' data-show='.show_infoCollection' />
@@ -85,7 +90,7 @@ $hooks->add_action('reminder_option_top', function(){
         if (!empty($acepptedTerms)){
             echo "<div class='d-none infobox show_infoCollection' style=''>
                 <div class='ml-3 p-1 pl-3 mt-2'>
-                    ".AlertHelper::get_al('','Ved overføring av sak for oppfølging tilkommer NOK <strong>'.CONF_priceCollectorFee.'.-</strong> <small>eks. MVA</small>', 'red', '!', false)."
+                    ".AlertHelper::get_al('','Ved overføring av sak for oppfølging tilkommer NOK <strong>'.$CONF_collection_fee['price'].'.-</strong> <small>eks. MVA</small>', 'red', '!', false)."
                 </div>
             </div>";
         }
@@ -108,7 +113,7 @@ $hooks->add_action('reminder_option_info', function(){
             <li class='font-weight-light'>Saken blir sendt inn til vår partner Collectio AS</li>
             <li class='font-weight-light'>Saken blir umiddelbart lagt til for oppfølging</li>
             <li class='font-weight-light'>Collectio følger opp med 1 purring og deretter til inkasso for raskere løsning</li>
-            <li class='font-weight-light'>Når saken blir løst vil du få pengene direkte inn på konto og faktura vil bli merket som betalt her hos oss</li>
+            <li class='font-weight-light'>Når saken blir løst vil du få gjelden direkte inn på konto (fratukket evnt gebyrer og andre trekk fra collectio AS) og faktura vil bli merket som betalt her hos oss</li>
 
         </ol>";
 
@@ -123,19 +128,31 @@ $hooks->add_action('reminder_option_info', function(){
         }
 
     echo "</div>";
-
+ 
 }); 
 
+
 $hooks->add_action('after_created_invoice', 'collectio_after_created_invoice_fn');
-function collectio_after_created_invoice_fn($invoiceid, $uid, $request){
+function collectio_after_created_invoice_fn($invoiceid, $uid, $invoiceData){
     // check if requeset contians that invoice should be automatically follwed up by partner
-    if (isset($request['collectionService']) && $request['collectionService'] == "1" && $request['invoiceType'] == 1){
+    if (isset($invoiceData['customData']['collectionService']) && $invoiceData['customData']['collectionService'] == "1" && $invoiceData['billtype'] == 'Faktura'){
         Metadata::set('collectio_followup_'.$invoiceid, 1, $uid);
         Metadata::set('collectio_status_'.$invoiceid, 'queued', $uid);
+
+        \LogInvoiceActions::add($uid, $invoiceid, 'Automatic collection service', 'activated');
     }
 
-    //error_log(var_export(array($invoiceid, $uid, $request), true));
+    //error_log(var_export(array($invoiceData['billtype'], $invoiceData['customData']['collectionService'], $invoiceid, $uid, $invoiceData), true));
 };
+
+/** add filter and register that this invoice is a invoice with collelction service active by the current $_request */
+\Filter::add_filter('invoice_custom_data', 'collectio_invoice_custom_data_fn');
+function collectio_invoice_custom_data_fn($data){
+    if (isset($_REQUEST['collectionService']) && $_REQUEST['collectionService'] == "1"){
+        $data['collectionService'] = 1;
+    }
+    return $data;
+}
 
 /* after register company */
 $hooks->add_action('register_company', 'collectio_register_company_fn');
@@ -187,22 +204,103 @@ function outbox_invoice_sent_fn($invoiceObj, $uid){
 
 /* after register company */
 $hooks->add_action('after_register_payment_success', 'collectio_after_register_payment_success_fn');
-function collectio_after_register_payment_success_fn($invoiceID, $uid){
-
+function collectio_after_register_payment_success_fn($invoiceID, $uid, $moreData = null){
     // get status
     $collectionStatus = Metadata::get('collectio_status_'.$invoiceID, $uid);
     
-    // do not change status if invoice has status completed
-    if ($collectionStatus == "completed"){
+    // if no status return
+    if (empty($collectionStatus)) return;
+    
+    // Check if status is processing and call payment registration
+    if ($collectionStatus == "processing") {
+       
+        // try to register payment
+        try {
+            // Get case number from metadata
+            $caseNumber = Metadata::get('collectio_case_'.$invoiceID, $uid);
+            // Get creditor ID
+            $creditorId = Metadata::get('collectio_creditor_id', $uid);
+            
+            // Get invoice data for the payment registration
+            $invoiceData = q("SELECT invoiceid FROM invoice WHERE id = '".$invoiceID."' AND uid = '".$uid."' LIMIT 1");
+            
+            
+            if ($invoiceData && $invoiceData->num_rows > 0) {
+               
+                $invoice = mfa($invoiceData);
+                $invoiceNumber = $invoice['invoiceid'];
+
+                // convert payment date to YYYY-MM-DD
+                if (isset($moreData['date'])){
+                    if (strtotime($moreData['date']) !== false){
+                        $dateOfPayment = date('Y-m-d', strtotime($moreData['date']));
+                    }else{
+                        $dateOfPayment = date('Y-m-d');
+                        error_log("Collectio: Invalid payment date: ".$moreData['date']);
+                    }
+                }else{
+                    $dateOfPayment = date('Y-m-d');
+                }
+                
+                // Extract payment details from moreData if available
+                $capital = isset($moreData['value']) ? $moreData['value'] : 0;
+
+                // normalize capital to 2 decimals
+                $capital = round($capital, 2);
+                
+                // Only proceed if we have all required data
+                if ($caseNumber && $creditorId && $invoiceNumber && $capital > 0) {
+
+                    // Try to instantiate the payment import class
+                    $className = 'Bullyard\\Predator\importPaymentsByProxy';
+                    if (class_exists($className)) {
+                        $predator = new $className();
+                        if (method_exists($predator, 'registerPayment')) {
+                            $response = $predator->registerPayment($caseNumber, $creditorId, $invoiceNumber, $dateOfPayment, $capital);
+
+                            $debugBodyExtensive = "UID: ".$uid.", Invoice ID: ".$invoiceID.", Case: ".$caseNumber.", Amount: ".$capital.", Date: ".$dateOfPayment.", Creditor ID: ".$creditorId.", Invoice Number: ".$invoiceNumber.", Response: ".var_export($response, true);
+                            if (is_object($response) && $response->Imported == "true"){
+                                // set status to completed
+                                debug("automatic payment registered to collectio", $debugBodyExtensive, true, 3);
+                                 // Log the payment registration attempt
+                                \LogInvoiceActions::add($uid, $invoiceID, 'Collectio payment registered', 'Case: '.$caseNumber.', Amount: '.$capital);
+                            }else{
+                                debug("Collectio plugin: after_register_payment_success", "Collectio plugin: payment registration error for invoice ".$invoiceID.", Response: ".var_export($response, true));
+                            }
+                        } else {
+                            debug("Collectio plugin: after_register_payment_success", "Collectio plugin: registerPayment method not found in class ".$className);
+                        }
+                    } else {
+                       debug("Collectio plugin: after_register_payment_success", "Collectio plugin: Payment import class ".$className." not found");
+                    }
+                }
+            }else{
+                debug("Collectio plugin: after_register_payment_success", "Collectio plugin: Invoice data not found for invoice ID: ".$invoiceID);
+            }
+        } catch (\Throwable $e) {
+            // Log any errors that occur during payment registration
+            debug("Collectio plugin: after_register_payment_success", "Collectio plugin: payment registration error for invoice ".$invoiceID.": ".$e->getMessage());
+        }
+    }else if ($collectionStatus == "completed"){
+        // do nothing
         return;
+    }else if ($collectionStatus == "canceled" || $collectionStatus == "recall"){
+        // do nothing
+        return;
+    }else{
+
+        // if status is queued, check if invoice is payed before status is completed or processing
+        // check if invoice is payed before status is completed or processing
+        // stop collection if invoice is payed before status is queued
+        $remaining = invoice_remaining($invoiceID);
+        if ($remaining == 0){
+            Metadata::set('collectio_followup_'.$invoiceID, 0, $uid);
+            Metadata::set('collectio_status_'.$invoiceID, 'canceled', $uid);
+        }
     }
 
-    $remaining = invoice_remaining($invoiceID);
-    if ($remaining == 0){
-        Metadata::set('collectio_followup_'.$invoiceID, 0, $uid);
-        Metadata::set('collectio_status_'.$invoiceID, 'canceled', $uid);
-    }
-    error_log("Remaining: ".$remaining);
+    
+    //error_log("Remaining: ".$remaining);
 }
 
 /* after delete company */
@@ -229,6 +327,125 @@ function collectio_reminder_resend_invoice_validation_fn($uid, $row){
 
 /* FILTERS */
 
+\Filter::add_filter('filter_payment_dialog_alert', 'collectio_filter_payment_dialog_alert_fn');
+function collectio_filter_payment_dialog_alert_fn($html){
+    global $uid, $id;
+    
+    $invoiceID = $id;
+    $collectionStatus = Metadata::get('collectio_status_'.$invoiceID, $uid);
+    
+    // Show alert if invoice is under collection processing
+    if ($collectionStatus == "processing") {
+        $alert = AlertHelper::get_al(
+            'Faktura er under oppfølging', 
+            'Denne fakturaen er for øyeblikket under oppfølging hos Collectio AS. Registrering av betaling vil automatisk sende betalingsinformasjonen til Collectio og <strong>kan ikke reverseres</strong>.<br><br>Vær svært nøyaktig med betalingsdato da denne også sendes til Collectio og det er ingen mulighet for å endre eller overstyre denne informasjonen senere.', 
+            'danger', 
+            '!',
+            false,
+            'mb-3'
+        );
+        
+        $html .= $alert;
+    }
+    
+    return $html;
+}
+
+\Filter::add_filter('filter_invoice_show_sidebar', 'collectio_filter_invoice_show_sidebar_fn');
+function collectio_filter_invoice_show_sidebar_fn($html){
+    global $uid, $row;
+    
+    $invoiceID = $row['id'];
+    $collectionStatus = Metadata::get('collectio_status_'.$invoiceID, $uid);
+    $caseNumber = Metadata::get('collectio_case_'.$invoiceID, $uid);
+    
+    // Only show if there's a case number
+    if (!empty($caseNumber)) {
+        
+        // Determine status display
+        $statusText = '';
+        $statusIcon = 'hio hio-star';
+        $statusColor = 'text-muted';
+        
+        switch ($collectionStatus) {
+            case 'queued':
+                $statusText = 'I kø for oppfølging';
+                $statusIcon = 'hio hio-clock';
+                $statusColor = 'text-warning';
+                break;
+            case 'processing':
+                $statusText = 'Under oppfølging';
+                $statusIcon = 'hio hio-clock';
+                $statusColor = 'text-danger';
+                break;
+            case 'completed':
+                $statusText = 'Oppfølging fullført';
+                $statusIcon = 'hio hio-check-circle';
+                $statusColor = 'text-success';
+                break;
+            case 'canceled':
+                $statusText = 'Oppfølging avbrutt';
+                $statusIcon = 'hio hio-x-circle';
+                $statusColor = 'text-muted';
+                break;
+            case 'recall':
+                $statusText = 'Tilbakekalt fra oppfølging';
+                $statusIcon = 'hio hio-arrow-uturn-left';
+                $statusColor = 'text-info';
+                break;
+            default:
+                $statusText = 'Ukjent status';
+                $statusIcon = 'hio hio-exclamation-triangle';
+                $statusColor = 'text-muted';
+                break;
+        }
+        
+        $card = '<div class="card bg-white mb-3 mt-4" style="border-radius: 30px;">
+                    <div class="card-header bg-warning" style="border-radius: 30px 30px 0 0;">
+                        <h5 class="card-title mt-1 mb-0 ">
+                            <span class="text-white"><i class="hio hio-shield-check"></i> Automatisk oppfølging</span>
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <p class="mb-2">
+                            <strong>Status:</strong> 
+                            <span class="'.$statusColor.'">
+                                <b><i class="'.$statusIcon.'"></i> '.$statusText.'</b>
+                            </span>
+                        </p>';
+        
+        if (!empty($caseNumber)) {
+            $card .= '<p class="mb-2">
+                        <strong>Saksnummer:</strong> 
+                        <span class="text-dark">'.$caseNumber.'</span>
+                    </p>';
+        }
+        
+        if ($collectionStatus == 'processing') {
+            $card .= '<p class="mb-0 text-muted">
+                        <small>
+                            <i class="hio hio-info-circle"></i> 
+                            Saken følges opp av Collectio AS. 
+                            Kontakt Collectio kundeservice via <a href="mailto:post@collectio.no?subject=Gjelder%20saksnummer%3A%20'.$caseNumber.'" target="_blank">E-post</a> eller via telefon <a href="tel:+4722806290">+47 22 80 62 90</a> for spørsmål.
+                        </small>
+                    </p>';
+        } elseif ($collectionStatus == 'queued') {
+            $card .= '<p class="mb-0 text-muted">
+                        <small>
+                            <i class="hio hio-info-circle"></i> 
+                            Saken vil automatisk overføres for oppfølging '.CONF_collectio_days_before_deadline.' dager etter forfall.
+                        </small>
+                    </p>';
+        }
+        
+        $card .= '    </div>
+                 </div>';
+        
+        $html .= $card;
+    }
+    
+    return $html;
+}
 
 \Filter::add_filter('filter_action_buttons_array', 'collectio_filter_action_buttons_array_fn');
 function collectio_filter_action_buttons_array_fn($array){
@@ -246,10 +463,10 @@ function collectio_filter_action_buttons_array_fn($array){
 
         if ($acceptedTerms !== false){
 
-            // check if invoice status is not payed
-            if ($row['status'] != 'payed'){
+            // check if invoice status is not payed and not draft
+            if ($row['status'] != 'payed' && $row['status'] != 'draft'){
 
-                if ($row['sent_inkasso']==0){
+                if ($row['sent_inkasso']!=1){
 
                     // check if CONF_collectio_days_before_deadline has passed after invoice due date
                     $dueDate = $row['duedate'];
@@ -259,41 +476,68 @@ function collectio_filter_action_buttons_array_fn($array){
                     $todayTimestamp = strtotime($today);
                     $deadlineTimestamp = strtotime($deadline);
 
-                    if ($todayTimestamp < $deadlineTimestamp){
-                    
-                        if ($inkassoStatus == 'queued'){
+                    //if ($todayTimestamp < $deadlineTimestamp){
 
-                            $btnParams = array(
-                                'hash'=>$row['hash'],
-                                'key'=>md5($row['hash'].CONF_hashKey),
-                                'req'=>'delete_case',
-                                'service_is_active' => true
-                            );
-                
-                            $array['invoiceBased']['stop'] = icon_button("#" ,"<span class='action-text'>Oppfølging: PÅ</span>", "time", "btn btn-success btn-icon btn-block text-left","", "btnToggleCollection", $btnParams);
-                            
-                        }else{
-                            $btnParams = array(
-                                'hash'=>$row['hash'],
-                                'key'=>md5($row['hash'].CONF_hashKey),
-                                'req'=>'queue_case',
-                                'service_is_active' => false
-                            );
-                
-                            $array['invoiceBased']['stop'] = icon_button("#" ,"<span class='action-text'>Oppfølging: AV</span>", "time", "btn btn-danger btn-icon btn-block text-left","", "btnToggleCollection", $btnParams);
+                        // check if status is not processing, cancelled, recall, completed
+                        if (!in_array($inkassoStatus, array('processing', 'recall', 'completed'))){
+                        
+                            if ($inkassoStatus == 'queued'){
+
+                                $btnParams = array(
+                                    'hash'=>$row['hash'],
+                                    'key'=>md5($row['hash'].CONF_hashKey),
+                                    'req'=>'delete_case',
+                                    'service_is_active' => true
+                                );
+                    
+                                $array['invoiceBased']['stop'] = icon_button("#" ,"<span class='action-text'>Oppfølging: PÅ</span>", "time", "btn btn-success btn-icon btn-block text-left","", "btnToggleCollection", $btnParams);
+                                
+                            }else{
+                                $btnParams = array(
+                                    'hash'=>$row['hash'],
+                                    'key'=>md5($row['hash'].CONF_hashKey),
+                                    'req'=>'queue_case',
+                                    'service_is_active' => false
+                                );
+                    
+                                $array['invoiceBased']['stop'] = icon_button("#" ,"<span class='action-text'>Oppfølging: AV</span>", "time", "btn btn-danger btn-icon btn-block text-left","", "btnToggleCollection", $btnParams);
+                            }
                         }
-                    }
+                    //}
                 }
             }
 
         }
-
-
-        
     }
 		
 	return $array;
     
+}
+
+
+\Filter::add_filter('filter_invoice_list_item', 'collectio_filter_invoice_list_item_fn');
+function collectio_filter_invoice_list_item_fn($invoiceData){
+    global $uid;
+    
+    // Access invoice data
+    $invoiceId = $invoiceData['id'];
+    $invoiceHash = $invoiceData['hash'];
+    
+    // Add custom data to the invoice object
+    // This data will be available in JavaScript
+    
+    // Example: Check collection status
+    $caseStatus = Metadata::get('collectio_status_' . $invoiceId, $uid);
+    
+    if (in_array($caseStatus, ['processing', 'queued'])) {
+        $invoiceData['collector_status'] = $caseStatus;
+        $invoiceData['collector_title'] = ($caseStatus == "processing") 
+            ? "Saken er under oppfølging" 
+            : "Kravet vil bli fulgt opp automatisk dersom den ikke betales innen forfall. <br><b>Husk å registrere innbetaling i systemet når faktura er betalt.</b>";
+    }
+    
+    // Return modified invoice data
+    return $invoiceData;
 }
 
 
@@ -307,34 +551,6 @@ function collectio_filter_invoice_title_fn($html){
         $bubbleTitle = ($caseStatus == "processing") ? "Saken er under oppfølging" : "Kravet vil bli automatisk fulgt opp dersom den ikke betales innen forfall";
 
         $info = '
-        <style>
-            .collector_status_bubble{
-                display: inline-block;
-                padding-left: 3px;
-                height: 12px;
-                width: 16px;
-                vertical-align: inherit;
-                line-height: 12px;
-            }
-            .collector_status_bubble svg{
-                display: block;
-            }
-            .collector_status_bubble .bubble_front.processing {
-                fill: rgba(255, 136, 0, 0.9);
-              }
-              .collector_status_bubble .bubble_back.processing {
-                fill: transparent;
-                stroke: rgba(255, 136, 0, 0.7);
-              }
-              .collector_status_bubble .bubble_front.queued {
-                fill: rgba(0, 255, 171, 0.9);
-              }
-              .collector_status_bubble .bubble_back.queued {
-                fill: transparent;
-                stroke: rgba(0, 255, 171, 0.7);
-              }
-        </style>
-        
         <div class="collector_status_bubble">
             <svg width="12px" height="12px" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 14 14" data-toggle="tooltip" title="'.$bubbleTitle.'">
                 <animate 
@@ -375,7 +591,9 @@ function collectio_override_options_fn($html){
     global $row, $uid;
     // check if invoice has been tagged for processing
     $isInQueue = Metadata::get('collectio_status_'.$row['id'], $uid);
-   
+
+    $CONF_collection_fee = \SubscriptionChecker::get_service_pricing($uid, 'collector_fee');
+
     if (!empty($isInQueue) && $isInQueue == "queued"){
 
         $output = "<div class='pl-3 pl-md-4 pt-0 card-body'>";
@@ -394,6 +612,9 @@ function collectio_override_options_fn($html){
                     <li>Registrer innbetaling av hele beløpet som skyldes</li>
                     <li>Opprett en kreditnota for fakturaen</li>
                     </ol>
+
+                    ".(new AlertHelper('Merk at dette er en betaltjeneste', 'Dersom saken blir overført til Partner for oppfølging vil det tilkomme kostnader på NOK <strong>'.$CONF_collection_fee['price'].'.-</strong> <small>eks. MVA</small> for overføringen.', false))->icon('!')->id('collectio_show_price')->type('red')->alert(false)."
+
                 </div>";
 
             $output .= " 
@@ -453,7 +674,8 @@ function collectio_override_output_inkasso_sent_fn($html){
         $output .= "<h4 class='card-title mt-2'>Kravet er under oppfølging hos Collectio AS</h4>";
             //AlertHelper::al('', "" , 'warning', '!');
             $output .=  "<hr class='spacer mt-3' />";
-            $output .=  "<p>Din sak har ekstern saksnummer: <b>".$caseNO."</b> og er under behandling hos vår partner. <br>Ta kontakt med <a href='https://www.collectio.no/kontakt' target='_blank'>Collectio AS kunderservice</a> dersom du har noen spørsmål.</p>";
+            $output .=  "<p>Din sak har ekstern saksnummer: <b>".$caseNO."</b> og er under behandling hos vår partner. <br>Ta kontakt med Collectio kundeservice via 
+                <a href='mailto:post@collectio.no?subject=Gjelder%20saksnummer%3A%20".$caseNO."' target='_blank'>E-post</a> eller via telefon <a href='tel:+4722806290'>+47 22 80 62 90</a> for spørsmål.</p>";
             
             // get status
             // $creditorID = Metadata::get('collectio_creditor_id', $uid); 
@@ -483,7 +705,7 @@ function collectio_override_output_inkasso_sent_fn($html){
                
                 <div class='mt-3 pl-2'><small><b>Status</b></small></div>
                 <div class='py-2 px-5 mt-1 rounded d-inline-block bg-warning' id='collectio_remaining_response'>
-                    henter status <i class='by-icon-sun by-spin by-va'></i>
+                    henter status <i class='spinner-border spinner-border-sm'></i>
                 </div>
                 ";
             
@@ -495,8 +717,12 @@ function collectio_override_output_inkasso_sent_fn($html){
 
 \Filter::add_filter('filter_html_price_list', 'collectio_filter_html_price_list_fn');
 function collectio_filter_html_price_list_fn($html){
+    global $uid;
+
+    $CONF_collection_fee = \SubscriptionChecker::get_service_pricing($uid, 'collector_fee');
+
     // add price for inkasso in the list
-    $Added = "<li>".CONF_priceCollectorFee.".- kr for oevrføring til purring/inkasso via partner</li>";
+    $Added = "<li>".$CONF_collection_fee['price'].".- kr for overføring til purring/inkasso via partner</li>";
     $html = str_replace( '</ul>', $Added."</ul>", $html);
     return $html;
 }
@@ -682,7 +908,7 @@ function collectio_create_case_for_invoice($invoiceID, $uid) {
                             $receiptCase = $obj->api_receipt->PredatorCaseNumber;
 
                             // if the receipt case number is numeric
-                            if (is_numeric($receiptCase)) {
+                            if (!empty($receiptCase)) {
                                 // update the metadata with the receipt case number
                                 $hasStatus = Metadata::set('collectio_case_'.$invoiceID, $receiptCase,  $uid);
                                 $hasStatus = Metadata::set('collectio_status_'.$invoiceID, 'processing',  $uid);
@@ -694,13 +920,22 @@ function collectio_create_case_for_invoice($invoiceID, $uid) {
                                 if ($uid == CONF_serviceProviderUID){
                                     $price = 0;
                                 }else{
-                                    $price = CONF_priceCollectorFee;
+                                    try {
+                                        $pricingInfo = \SubscriptionChecker::get_service_pricing($uid, 'collector_fee');
+                                        $price = $pricingInfo['price'];
+                                    } catch (\Throwable $th) {
+                                        //throw $th;  
+                                        debug("Plugin Collectio: add case ERROR", "Error getting pricing info: ".$th->getMessage()."<br><br>ID:'".$invoiceID."'<br>uid:".$uid);
+                                        $price = 0;
+                                    }
                                 }	
                                 // register the service
                                 \log_service($price, $uid, "Tjeneste: Sending av krav for ekstern oppfølging", $invoiceID, "collectio", "External ID: ".$receiptCase);
+                                \LogInvoiceActions::add($uid, $invoiceID, 'Collectio case transfer', $receiptCase);
                                 // set the output message
                                 $result["status"] = "ok";
                                 $result["message"] = "Gratulerer! Saken har blitt sendt til oppfølging.";
+                                $result["caseID"] = $receiptCase;
                             } else {
                                 // if the receipt case number is not numeric, log the error and set the output message
                                 debug("Plugin Collectio add case ERROR", "API RESPONSE PROBLEM:<br><pre>Receipt:".var_export($obj->api_receipt, true)."</pre><br><pre>Error:".var_export($obj->error, true)."</pre><br><br>ID:'".$invoiceID."'<br>uid:".$uid);
@@ -744,11 +979,252 @@ Pages::register_page('collectio_stats', $_SERVER['DOCUMENT_ROOT'].'/plugins/coll
 
 \Filter::add_filter('filter_add_admin_menu_element', 'collectio_filter_add_admin_menu_element_fn');
 function collectio_filter_add_admin_menu_element_fn($empty){
-    return '
+    return $empty.'
     <div class="dropdown-divider"></div>
     <li>
         <a class="dropdown-item" href="/?go=collectio_stats">
-            <i class="by-icon-push-pin" aria-hidden="true"></i>&nbsp;COLLECTIO STATS
+            <i class="hio hio-shield-check" aria-hidden="true"></i>&nbsp;COLLECTIO STATS
         </a>
     </li>';
+}
+
+Pages::register_page('collectio_case_statuses', $_SERVER['DOCUMENT_ROOT'].'/plugins/collectio/pages/case_statuses.php');
+
+\Filter::add_filter('filter_add_admin_menu_element', 'collectio_filter_add_admin_menu_element_2_fn');
+function collectio_filter_add_admin_menu_element_2_fn($empty){
+    return $empty.'
+    <div class="dropdown-divider"></div>
+    <li>
+        <a class="dropdown-item" href="/?go=collectio_case_statuses">
+            <i class="hio hio-shield-check" aria-hidden="true"></i>&nbsp;COLLECTIO CASE STATUSES
+        </a>
+    </li>';
+}
+
+
+function collectio_completed_case_number_to_text($number) {
+    $mapping = [
+        '9000' => 'OO - Filopplast ved sakreg',
+        '9001' => 'OO - Filopplast i sak',
+        '901'  => 'Avsluttet Betalt',
+        '902'  => 'Avsluttet direkte betalt',
+        '903'  => 'Avslutt dir bet før ink',
+        '904'  => 'Avsluttet akkord',
+        '906'  => 'Avsluttet betalt rettslig',
+        '909'  => 'Avsluttet betalt overvåking',
+        '911'  => 'Avsluttet mindreårig',
+        '912'  => 'Tilbakekalt av oppdragsgiver',
+        '913'  => 'Feilsendt inkasso',
+        '914'  => 'Avsluttet kreditert krav',
+        '915'  => 'Avsluttet utvandret',
+        '916'  => 'Avsl. insolvent jfr, namsmann',
+        '917'  => 'Avsluttet skyldner død',
+        '918'  => 'Avsluttet overført Intrum',
+        '921'  => 'Avsluttet konkurs',
+        '922'  => 'Avsluttet jfr gjeldsordning',
+        '923'  => 'Avsluttet Foreldet',
+        '924'  => 'Avsl. konk. ikke anmeldt',
+        '926'  => 'Avsluttet henvist til retten',
+        '927'  => 'Avsl. tvist',
+        '928'  => 'Avsluttet kreditor konkurs',
+        '932'  => 'Avsluttet, manglende tilb.m.',
+        '933'  => 'Avsluttet, pågang uønsket',
+        '934'  => 'Avsluttet samarbeid',
+        '941'  => 'Avsl. for lavt beløp u/pågang',
+        '945'  => 'Avsluttet, adr. ukjent',
+        '999'  => 'Flyttet til',
+
+        // Newly added mappings
+        '1001' => 'Inkassovarsel sendt',
+        '1002' => 'Betalingsoppfordring',
+        '1003' => 'Varsel rettslig sendes',
+        '1004' => 'Varsel rettslig/Betalingsoppf',
+        '1005' => 'Inkassovarsel Kapitol sendt',
+        '1006' => 'BO test omni',
+        '1007' => 'Purring rest',
+        '1008' => 'Bedt kunden om å ringe',
+        '1009' => 'Varsel om pant i konto',
+        '1010' => 'Ubetalt krav',
+        '1011' => 'Konkursvarsel sendt',
+        '1012' => 'Betalingsoppfordring fornyels',
+        '1013' => 'Avsluttet sak',
+        '1014' => 'Notifikasjon',
+        '1015' => 'Tilbud om reduksjon',
+        '1016' => 'Avtalt oppgjør',
+        '1017' => 'Varsel særlig tvang fravikels',
+        '1018' => 'Varsel rettslig/Betalingsoppf',
+        '1019' => 'Varsel tvangssalg løsøre',
+        '1020' => 'Avdragsgiro sendes',
+        '1021' => 'Avdragsgiro arb.giv.',
+        '1022' => '1. Purring avdrag',
+        '1023' => 'Varsel rettslig iht tvistelov',
+        '1024' => 'Ingen giro',
+        '1025' => 'Betalingsdokument',
+        '1026' => 'Restkrav egeninkasso',
+        '1027' => 'Purring arb.giv sendt',
+        '1028' => 'Avdragsgiro mail',
+        '1029' => 'Betalingspåm Tidsk. tj. hunde',
+        '1030' => 'Purring uten gebyr sendt',
+        '1031' => 'Purring med gebyr sendt',
+        '1032' => 'Inkassovarsel sendt',
+        '1033' => 'Purring før tva. løs sendes',
+        '1034' => 'Purring før tva. fast',
+        '1035' => 'Betalingspåminnelse sendt',
+        '1036' => 'Inkassovarsel sendt',
+        '1037' => 'Inkassovarsel sendt',
+        '1038' => 'Egen inkassovarsel sendt',
+        '1039' => 'Inkassovarsel sendt',
+        '1040' => 'Inkassovarsel sendt',
+        '1041' => 'Betalingsoppfordring sendt',
+        '1042' => 'Betalingspåminnelse TS',
+        '1043' => 'Oppfordring til kontakt sendt',
+        '1044' => 'Fornyet varsel sendt',
+        '1045' => 'Betalingsoppfordring sendt',
+        '1046' => 'Ringt ikke kontakt sendt',
+        '1047' => 'Varsel om overvåking sendt',
+        '1048' => 'Inkassovarsel international',
+        '1049' => 'Betalingsoppfordring Internat',
+        '1050' => 'Gjeldsbrev',
+        '1051' => 'Betalingsdokument',
+        '1052' => 'Kravsoversikt sendt',
+        '1053' => 'Betalingspåminnelse',
+        '1054' => 'Inkassovarsel Accountor',
+        '1055' => 'Inkassovarsel Sporty24 sendt',
+        '1056' => 'Varsel rettslig',
+        '1057' => 'Infobrev uten gebyr',
+        '1058' => 'Anmeldelse krav GO',
+        '1059' => 'Inkassovarsel kr 70 sendt',
+
+        // Newly added mappings from current request
+        '1060' => 'Inkassoovervåking',
+        '1061' => 'Kampanje 50% epost',
+        '1062' => 'Kampanje omkostninger',
+        '1063' => 'Kampanje desember',
+        '1064' => 'Kampanje redusert oppgjør',
+        '1065' => 'Julekampanje',
+        '1066' => 'Kampanje 20% hs og rente',
+        '1067' => 'City Gym postoppkrav',
+        '1068' => 'Beklagelse',
+        '1069' => 'Tilbud om avdragsordning',
+        '1070' => 'Inkassovarsel telecom',
+        '1071' => 'Betalingsoppfordring Telecom',
+        '1072' => 'Begjæring utlegg/forliksklage',
+        '1073' => 'Inkassovarsel Telecom bedr',
+        '1074' => 'Betalingsoppfordring flere fak',
+        '1075' => 'Egeninkasso',
+        '1076' => 'oEvgeervnåinkkasso overvåk',  // Appears to be a typo, but preserving as given
+        '1077' => 'Egeninkasso a2vdrag',
+        '1078' => 'Påminnelse ef',
+        '1079' => 'Betalingspåminnelse Norbond',
+        '1080' => 'Forhanstående panthaver',
+        '1081' => 'ELSA Begjæring 7-2 f',
+        '1082' => 'Betalingsoppfordring Egenin',
+        '1083' => 'ELSA Forliksklage',
+        '1084' => 'ELSA Utleggsforretning vanlig',
+        '1085' => 'Varsel arbeidsgiver',
+        '1086' => 'Delbetaling til namsmannen',
+        '1087' => 'Møtefullmakt',
+        '1088' => 'Flytting av lønnstrekk',
+        '1089' => 'Sletting av pant løsøre',
+        '1090' => 'Forliksklage',
+        '1091' => 'Begjæring om utlegg',
+        '1092' => 'Begjæring utlegg/forliksklage',
+        '1093' => 'Tvangssalg løsøre',
+        '1094' => 'Tv.salg eiendom begj.',
+        '1095' => 'Begjæring om tvangsdekning',
+        '1096' => 'Inf begjæring',
+        '1097' => 'Tilbakekalt begjæring',
+        '1098' => 'Sletting av utlegg',
+        '1099' => 'Sletting av fast eiendom',
+        '1100' => 'Oppdater salær',
+        '1101' => 'lett salær',
+        '1102' => 'Eksterne prosess omkostninger',
+        '1103' => 'Nullstill salær',
+        '1104' => 'Godkjent tvangssalgsforeretnin',
+        '1105' => 'Retinglysning fast eiendom',
+        '1106' => 'Betalingspåminnelse e-post',
+        '1107' => 'Varsel om at sak kan reises',
+        '1108' => 'Forliksrådet Rettshjelp',
+        '1109' => 'Inkassovarsel DEMENTI',
+        '1110' => 'Betalingsoppfordring DEMENTI',
+        '1112' => 'BOF test',
+        '1113' => 'Klage husleietvistutvalget',
+        '1114' => 'Husleie begjæring 7-2F',
+        '1137' => 'Inkassovarsel Engelsk',
+        '1138' => 'Betalingsoppfordring engelsk',
+        '1139' => 'Varsel rettslig/BOF engelsk',
+        '1140' => 'Fritekstbrev skyldner',
+        '1141' => 'Anmeldelse i konkursbo ekstern',
+        '1142' => 'Fritekstbrev tredjeperson',
+        '1143' => 'Anmeldelse i konkursbo',
+        '1144' => 'Anmeldelse i dødsbo',
+        '1145' => 'Skifteforespørsel',
+        '1146' => 'Anmeldelse i løyvegaranti',
+        '1147' => 'Bekreftelse avsluttet sak',
+        '1148' => 'Tilbakekalt forliksklage',
+        '1149' => 'Fritekstbrev forliksrådet',
+        '1150' => 'Betalingsoppfordring',
+        '1151' => 'Varsel rettslig/Betalingsoppf.',
+
+        '1170' => 'Inkassovarsel foresatte',
+        '1171' => 'Betalingsoppfor foresatte',
+        '1172' => 'Varsel rettslig foresatte',
+        '1178' => 'Purring med gebyr v foresatte',
+        '1179' => 'Inkassovarsel',
+        '1180' => 'Fullmakt fristillelse',
+
+        '1201' => 'Utlegg lønn',
+        '1202' => 'Utlegg trygd',
+        '1203' => 'Utlegg løsøre',
+        '1204' => 'Utlegg eiendom',
+        '1205' => 'Intet til utlegg',
+        '1206' => 'Adr. sjekk ny notert',
+        '1207' => 'Post i retur opphørt',
+        '1208' => 'Post i retur',
+        '1209' => 'Post i retur, ettersendt',
+        '1210' => 'Post i retur, ny adr. notert',
+        '1211' => 'Utvandret',
+        '1212' => 'Ukjent på adressen',
+        '1213' => 'Gjeldsordning',
+        '1214' => 'Reg. på samme adresse',
+        '1215' => 'Uten fast bostedsadresse',
+        '1216' => 'Ringt ikke svar',
+        '1217' => 'Ringt avtalt oppgjør',
+        '1218' => 'Skyldner er konkurs',
+        '1219' => 'Avtalt oppgjør',
+        '1220' => 'Ringt skyldner',
+        '1221' => 'Avventer tilbakemelding',
+        '1222' => 'Ringe debitor',
+        '1223' => 'Skyldner er død',
+        '1224' => 'Gjeldsrådgivning',
+        '1225' => 'Inngående telefon',
+        '1226' => 'Misligholdt avdragsordning',
+        '1227' => 'Vurder rettslig tiltak',
+        '1228' => 'Ikke funnet telefonnummer',
+        '1230' => 'Funnet ny adresse',
+        '1231' => 'Manuell tekst',
+        '1232' => 'Berostillelse',
+        '1233' => 'Epost Arkivering',
+        '1234' => 'Utsatt sak',
+        '1235' => 'UB/FK SENDT',
+        '1236' => 'Tungt salær i avdragsordning',
+        '1237' => 'Avventer oppd sms',
+        '1238' => 'FRISTAVBRUDD',
+        '1239' => 'Kredittsjekk Infolink',
+        '1240' => 'Kredittvurdering',
+        '1241' => 'Overført overvåking',
+        '1242' => 'Ringt avtalt oppgjør KSF',
+        '1243' => 'Ringt avtalt oppgjør SHF',
+        '1244' => 'Ringt avtalt oppgjør',
+        '1245' => 'Webmelding mottatt',
+        '1246' => 'Webmelding sendt',
+        '1250' => 'Oversendes utenlandsinkasso?',
+        '1251' => 'Sendes til ligningsvask',
+    ];
+
+   if (isset($mapping[$number])) {
+       return $number.": ".$mapping[$number];
+    } else {
+        return 'Ukjent status ('.$number.')';
+    }
 }

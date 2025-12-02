@@ -118,18 +118,18 @@ $(function() {
                 btnData.service_is_active = serviceState; // update service status in button data-params
                 
                 if(serviceState) {
-                    $.fn.alert('<center>Tjenesten er nå PÅ<br><em><small>Merk at dette er en betalt tjeneste. Dersom saken blir overført for ekstern oppfølging vil det påløpe overføringskostnad på NOK 35.-</small></em></center>');
+                    $.fn.alert('<center>Tjenesten er nå PÅ<br><em><small>Merk at dette er en betalt tjeneste. Dersom saken blir overført for ekstern oppfølging vil det påløpe overføringskostnad på NOK 35.-</small></em></center>', 'Melding', function(){window.location.reload()});
                     $btn.removeClass('btn-danger').addClass('btn-success'); // switch class to btn-success
                     
                     $(".action-text").text(" Oppfølging: PÅ");
                 } else {
-                    $.fn.alert('Tjenesten er nå AV');
+                    $.fn.alert('Tjenesten er nå AV', 'Melding', function(){window.location.reload()});
                     $btn.removeClass('btn-success').addClass('btn-danger'); // switch class to btn-danger
                     $(".action-text").text(" Oppfølging: AV");
                 }
     
             } else if (data.status === 'failed') {
-                $.fn.alert('En feil oppstod. Vennligst prøv igjen.');
+                $.fn.alert('En feil oppstod. Vennligst prøv igjen.', 'Melding', function(){window.location.reload()});
             }
             //top.location.href = location.href;
         });
