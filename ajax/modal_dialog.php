@@ -41,7 +41,7 @@ if ($_REQUEST['ReqDialog']=="plugin_show_terms"){
             <input type='checkbox' class='custom-control-input' name='confirmAccountCreation' id='confirmAccountCreation' value='true'>
             <label class='custom-control-label' for='confirmAccountCreation'><a href='/terms' target='_blank' class='font-weight-bold'>Jeg godtar vilkårene</a> og ønsker å opprette gratis konto hos Collectio AS.</label>
         </div>";
-    echo json_encode(array("status"=> "ok", "title"=> $title, "html" => $terms, "button"=> "Fullfør registrering"));
+    echo json_encode(array("status"=> "ok", "title"=> $title, "html" => $terms, "button"=> "Fullfør"));
     
 }else{
 	echo json_encode(array("status"=> "failed", "message" => "Kunne ikke hente dialog. Vennlist oppdater siden og prøv igjen."));

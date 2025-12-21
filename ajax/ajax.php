@@ -43,8 +43,6 @@ if (is_numeric($uid) && $_SESSION['aid']){
 
 
 	if ($req=="collectio_accept_terms"){
-
-
         $creditorID = collectio_create_creditor($uid);
        
         if (is_numeric($creditorID)){

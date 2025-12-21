@@ -6,7 +6,7 @@ if (!defined('CONF_collectio_enable')) define('CONF_collectio_enable', true);
 // used to determine if user har accepted terms when registering
 define('CONF_collectio_enabled', 1682434278); //  tirsdag 25. april 2023 kl. 16:51:14 GMT+02:00 DST
 
-define('CONF_collectio_days_before_deadline', 15);
+define('CONF_collectio_days_before_deadline', 14);
 define('CONF_collectio_deny_manual_before_deadline', true); // does not allow sending manually before the deadline is met
 
 

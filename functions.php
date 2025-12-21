@@ -14,8 +14,8 @@ use Bullyard\Predator\PredatorCaseImport;
 
 
 /* HOOKS */
-
-$hooks->add_action('invoice_option_checkbox', 'collectio_invoice_option_checkbox_fn');
+// this hook is deactivated since its now executed by the reminder
+//$hooks->add_action('invoice_option_checkbox', 'collectio_invoice_option_checkbox_fn');
 function collectio_invoice_option_checkbox_fn($uid, $invoiceType){
 
     $CONF_collection_fee = \SubscriptionChecker::get_service_pricing($uid, 'collector_fee');
@@ -84,7 +84,7 @@ $hooks->add_action('reminder_option_top', function(){
 
     echo "<div class='custom-control custom-radio'>
             <input id='radioCollect' autocomplete='off' type='radio' name='sendingMethod' value='collection' class='custom-control-input' data-show='.show_infoCollection' />
-            <label for='radioCollect' class='custom-control-label'><strong>Automatisk oppfølging, purring og inkasso.</strong> <span class='badge badge-danger'>NYHET</span></label>
+            <label for='radioCollect' class='custom-control-label'><strong>Ekstern oppfølging via partner (purring og inkasso).</strong></label>
         </div>";
 
         if (!empty($acepptedTerms)){
@@ -109,7 +109,7 @@ $hooks->add_action('reminder_option_info', function(){
         Vår partner tar seg av innkrevingen og vil følge opp kunden hele veien frem til saken blir løst. 
 
         <h6 class='mt-2'>Hvordan fungerer det?</h6>
-        <ol class='mt-1 pl-3 font-weight-bold'>
+        <ol class='mt-1 pl-3 font-weight-bold small'>
             <li class='font-weight-light'>Saken blir sendt inn til vår partner Collectio AS</li>
             <li class='font-weight-light'>Saken blir umiddelbart lagt til for oppfølging</li>
             <li class='font-weight-light'>Collectio følger opp med 1 purring og deretter til inkasso for raskere løsning</li>
@@ -258,24 +258,24 @@ function collectio_after_register_payment_success_fn($invoiceID, $uid, $moreData
                         if (method_exists($predator, 'registerPayment')) {
                             $response = $predator->registerPayment($caseNumber, $creditorId, $invoiceNumber, $dateOfPayment, $capital);
 
-                            $debugBodyExtensive = "UID: ".$uid.", Invoice ID: ".$invoiceID.", Case: ".$caseNumber.", Amount: ".$capital.", Date: ".$dateOfPayment.", Creditor ID: ".$creditorId.", Invoice Number: ".$invoiceNumber.", Response: ".var_export($response, true);
+                            //$debugBodyExtensive = "UID: ".$uid.", Invoice ID: ".$invoiceID.", Case: ".$caseNumber.", Amount: ".$capital.", Date: ".$dateOfPayment.", Creditor ID: ".$creditorId.", Invoice Number: ".$invoiceNumber.", Response: ".var_export($response, true);
                             if (is_object($response) && $response->Imported == "true"){
                                 // set status to completed
-                                debug("automatic payment registered to collectio", $debugBodyExtensive, true, 3);
+                                //debug("automatic payment registered to collectio", $debugBodyExtensive, true, 3);
                                  // Log the payment registration attempt
                                 \LogInvoiceActions::add($uid, $invoiceID, 'Collectio payment registered', 'Case: '.$caseNumber.', Amount: '.$capital);
                             }else{
-                                debug("Collectio plugin: after_register_payment_success", "Collectio plugin: payment registration error for invoice ".$invoiceID.", Response: ".var_export($response, true));
+                                //debug("Collectio plugin: after_register_payment_success", "Collectio plugin: payment registration error for invoice ".$invoiceID.", Response: ".var_export($response, true));
                             }
                         } else {
-                            debug("Collectio plugin: after_register_payment_success", "Collectio plugin: registerPayment method not found in class ".$className);
+                            //debug("Collectio plugin: after_register_payment_success", "Collectio plugin: registerPayment method not found in class ".$className);
                         }
                     } else {
-                       debug("Collectio plugin: after_register_payment_success", "Collectio plugin: Payment import class ".$className." not found");
+                       //debug("Collectio plugin: after_register_payment_success", "Collectio plugin: Payment import class ".$className." not found");
                     }
                 }
             }else{
-                debug("Collectio plugin: after_register_payment_success", "Collectio plugin: Invoice data not found for invoice ID: ".$invoiceID);
+                //debug("Collectio plugin: after_register_payment_success", "Collectio plugin: Invoice data not found for invoice ID: ".$invoiceID);
             }
         } catch (\Throwable $e) {
             // Log any errors that occur during payment registration
@@ -304,6 +304,29 @@ function collectio_after_register_payment_success_fn($invoiceID, $uid, $moreData
 }
 
 /* after delete company */
+/* deactivate automatic collection if reminder plan is assigned or resumed */
+$hooks->add_action('reminder_plan_assigned', 'collectio_reminder_plan_assigned_resumed_fn');
+$hooks->add_action('reminder_plan_resumed', 'collectio_reminder_plan_assigned_resumed_fn');
+function collectio_reminder_plan_assigned_resumed_fn($invoice_id, $plan_id = null, $assigned_by = null){
+	// Get invoice uid for metadata lookup
+	$invoice_res = q("SELECT uid FROM invoice WHERE id = " . intval($invoice_id) . " LIMIT 1");
+	if ($invoice_res->num_rows > 0) {
+		$uid = intval(mfa($invoice_res)['uid']);
+		if ($uid > 0) {
+			// When a reminder plan is assigned or changed, check if Collectio status is "queued" and delete it
+			$collectio_status = Metadata::get('collectio_status_' . $invoice_id, $uid);
+            //debug("Collectio plugin: reminder_plan_assigned_resumed", "Collectio plugin: reminder plan assigned or resumed for invoice ".$invoice_id.", uid: ".$uid.", plan_id: ".$plan_id.", assigned_by: ".$assigned_by.", collectio_status: ".$collectio_status, true, 3);
+			if ($collectio_status === 'queued') {
+				// Delete the queued collectio status metadata
+				Metadata::delete('collectio_status_' . $invoice_id, $uid);
+			}
+
+            //debug("Collectio plugin: reminder_plan_assigned_resumed", "Collectio plugin: reminder plan assigned or resumed for invoice ".$invoice_id.", uid: ".$uid.", plan_id: ".$plan_id.", assigned_by: ".$assigned_by, true, 3);
+		}
+	}
+}
+
+
 $hooks->add_action('delete_company', 'collectio_delete_company_fn');
 function collectio_delete_company_fn($uid){
     
@@ -321,6 +344,39 @@ function collectio_reminder_resend_invoice_validation_fn($uid, $row){
     if (isset($isBeingCollected) && is_numeric($isBeingCollected)){
         echo json_encode(array("internal"=> "Saken er under ekstern oppfølging og kan ikke sendes igjen."));
         die();
+    }
+}
+
+/* reminder plan validation */
+$hooks->add_action('reminder_sending_plan_validation', 'collectio_reminder_sending_plan_validation_fn');
+function collectio_reminder_sending_plan_validation_fn($uid, $row, $reminderPlanId){
+    
+    // Only validate if a plan is selected (planId > 0)
+    if ($reminderPlanId > 0) {
+        $invoiceID = $row['id'];
+        
+        // Check if invoice is already in collection process
+        $inkassoStatus = Metadata::get('collectio_status_'.$invoiceID, $uid);
+        if (in_array($inkassoStatus, array('queued', 'processing', 'recall', 'completed'))) {
+            $statusMessages = array(
+                'queued' => 'i kø for oppfølging',
+                'processing' => 'under oppfølging',
+                'recall' => 'tilbakekalt fra oppfølging',
+                'completed' => 'fullført'
+            );
+            $statusText = isset($statusMessages[$inkassoStatus]) ? $statusMessages[$inkassoStatus] : $inkassoStatus;
+            echo json_encode(array("internal"=> "Du kan ikke bruke oppfølgingsplaner på denne fakturaen da den allerede er ".$statusText." hos inkassobyrået."));
+            die();
+        }
+        
+        // Check if user has accepted terms
+        $acceptedTerms = Metadata::get('collectio_terms', $uid);
+        
+        // If terms are not accepted, prevent using reminder plans
+        if (empty($acceptedTerms)) {
+            echo json_encode(array("internal"=> "Du kan ikke bruke oppfølgingsplaner før du har godtatt vilkår og betingelser for Inkasso. <a href=\"#\" class=\"collectio_accept_terms\">Klikk her for å godta vilkårene</a>."));
+            die();
+        }
     }
 }
 
@@ -348,6 +404,69 @@ function collectio_filter_payment_dialog_alert_fn($html){
         $html .= $alert;
     }
     
+    return $html;
+}
+
+\Filter::add_filter('reminder_plan_output', 'collectio_filter_reminder_plan_output_fn');
+function collectio_filter_reminder_plan_output_fn($html){
+    global $uid, $invoiceType;
+    
+    // Only check for invoice type 1 (regular invoice)
+    if (intval($invoiceType) !== 1) {
+        return $html;
+    }
+    
+    // Check if user has accepted terms
+    $acceptedTerms = Metadata::get('collectio_terms', $uid);
+    
+    // If terms are not accepted, disable select box and show alert
+    if (empty($acceptedTerms)) {
+        // Remove selected attribute from all options
+        $html = preg_replace('/\s+selected(?=\s|>)/', '', $html);
+        
+        // Select the "Ikke bruk oppfølgingsplan" option (value="0") instead
+        $html = str_replace(
+            '<option value="0"',
+            '<option value="0" selected',
+            $html
+        );
+        
+        // Disable the select box
+        $html = str_replace(
+            '<select class="form-control selectpicker full-description" name="reminder_plan_id" id="reminder_plan_id"',
+            '<select class="form-control selectpicker full-description" name="reminder_plan_id" id="reminder_plan_id" disabled="disabled"',
+            $html
+        );
+
+        // send hidden input with the value 0
+        $html .= '<input type="hidden" name="reminder_plan_id" value="0">';
+
+        // Add alert after the small text (before closing the pl-4 div)
+        $alert_html = AlertHelper::get_al(
+            'Aktiver bruk av oppfølginsplaner', 
+            'For å kunne benytte oppfølginsplaner må du først <a href="#" class="collectio_accept_terms">godta vilkår og betingelser</a>  for Inkasso.', 
+            'warning', 
+            '?', 
+            false
+        );
+        
+        // Insert alert after the small text element (before closing pl-4 div)
+        // Find the last </small> tag and insert alert before the closing </div> tags
+        $html = preg_replace(
+            '/(<\/small>\s*<\/div>\s*<\/div>)/',
+            '</small>
+        
+        <div id="infoPluginAcceptTermsReminder" class="mt-3">
+            '.$alert_html.'
+        </div>
+    </div>
+</div>',
+            $html,
+            1
+        );
+    }
+    
+    // Return modified or original HTML
     return $html;
 }
 
@@ -468,42 +587,51 @@ function collectio_filter_action_buttons_array_fn($array){
 
                 if ($row['sent_inkasso']!=1){
 
-                    // check if CONF_collectio_days_before_deadline has passed after invoice due date
-                    $dueDate = $row['duedate'];
-                    $daysBeforeDeadline = CONF_collectio_days_before_deadline;
-                    $deadline = date('Y-m-d', strtotime($dueDate. ' + '.$daysBeforeDeadline.' days'));
-                    $today = date('Y-m-d');
-                    $todayTimestamp = strtotime($today);
-                    $deadlineTimestamp = strtotime($deadline);
+                    // Check if there's an active reminder plan - if so, hide collection button
+                    $has_active_reminder_plan = false;
+                    if (class_exists('ReminderPlanManager') && \Settings::get('reminder_system_enable') !== "false") {
+                        $has_active_reminder_plan = \ReminderPlanManager::has_active_reminders($invoiceID);
+                    }
 
-                    //if ($todayTimestamp < $deadlineTimestamp){
+                    // Only show collection button if there's no active reminder plan
+                    if (!$has_active_reminder_plan) {
+                        // check if CONF_collectio_days_before_deadline has passed after invoice due date
+                        $dueDate = $row['duedate'];
+                        $daysBeforeDeadline = CONF_collectio_days_before_deadline;
+                        $deadline = date('Y-m-d', strtotime($dueDate. ' + '.$daysBeforeDeadline.' days'));
+                        $today = date('Y-m-d');
+                        $todayTimestamp = strtotime($today);
+                        $deadlineTimestamp = strtotime($deadline);
 
-                        // check if status is not processing, cancelled, recall, completed
-                        if (!in_array($inkassoStatus, array('processing', 'recall', 'completed'))){
+                        //if ($todayTimestamp < $deadlineTimestamp){
+
+                            // check if status is not processing, cancelled, recall, completed
+                            if (!in_array($inkassoStatus, array('processing', 'recall', 'completed'))){
+                            
+                                if ($inkassoStatus == 'queued'){
+
+                                    $btnParams = array(
+                                        'hash'=>$row['hash'],
+                                        'key'=>md5($row['hash'].CONF_hashKey),
+                                        'req'=>'delete_case',
+                                        'service_is_active' => true
+                                    );
                         
-                            if ($inkassoStatus == 'queued'){
-
-                                $btnParams = array(
-                                    'hash'=>$row['hash'],
-                                    'key'=>md5($row['hash'].CONF_hashKey),
-                                    'req'=>'delete_case',
-                                    'service_is_active' => true
-                                );
-                    
-                                $array['invoiceBased']['stop'] = icon_button("#" ,"<span class='action-text'>Oppfølging: PÅ</span>", "time", "btn btn-success btn-icon btn-block text-left","", "btnToggleCollection", $btnParams);
-                                
-                            }else{
-                                $btnParams = array(
-                                    'hash'=>$row['hash'],
-                                    'key'=>md5($row['hash'].CONF_hashKey),
-                                    'req'=>'queue_case',
-                                    'service_is_active' => false
-                                );
-                    
-                                $array['invoiceBased']['stop'] = icon_button("#" ,"<span class='action-text'>Oppfølging: AV</span>", "time", "btn btn-danger btn-icon btn-block text-left","", "btnToggleCollection", $btnParams);
+                                    $array['invoiceBased']['stop'] = icon_button("#" ,"<span class='action-text'>Oppfølging: PÅ</span>", "time", "btn btn-success btn-icon btn-block text-left","", "btnToggleCollection", $btnParams);
+                                    
+                                }else{
+                                    $btnParams = array(
+                                        'hash'=>$row['hash'],
+                                        'key'=>md5($row['hash'].CONF_hashKey),
+                                        'req'=>'queue_case',
+                                        'service_is_active' => false
+                                    );
+                        
+                                    $array['invoiceBased']['stop'] = icon_button("#" ,"<span class='action-text'>Oppfølging: AV</span>", "time", "btn btn-danger btn-icon btn-block text-left","", "btnToggleCollection", $btnParams);
+                                }
                             }
-                        }
-                    //}
+                        //}
+                    }
                 }
             }
 
@@ -620,35 +748,10 @@ function collectio_override_options_fn($html){
             $output .= " 
                 <div class='col-md-12 pl-md-2'>
                     <div class='mt-3 pl-2'><small><b>Handlinger</b></small></div>
-                        <button class='btn btn-danger' id='cancel_collection'>Avbryt oppfølging</button><br>
+                        <button class='btn btn-danger' id='cancel_collection_in_invoice_page' data-hash='".$row['hash']."'>Avbryt oppfølging</button><br>
                         <!--button class='btn btn-primary mt-2' id='force_collection'>Følg opp nå</button-->
                 </div>
                 ";
-
-            $output .=  '<script>
-                $(function(){
-                    $("#cancel_collection").on("click", function(event){
-                        event.preventDefault();
-                        $.fn.confirm("Vil du avbryte automatisk oppfølging av saken?", (ans) => {
-                            if (ans) {
-                                $.ajax({
-                                    url: "/plugins/collectio/ajax/ajax.php",
-                                    type: "GET",
-                                    dataType: "JSON",
-                                    data: {
-                                        req: "stop_case",
-                                        hash: "'.$row['hash'].'"
-                                    }
-                                })
-                                .done(function(response) {
-                                    top.location.href = location.href;
-                                });
-                            }
-                        });   
-                    });
-                });
-            
-            </script>';
             
         $output .= "</div>";
         return $output;
@@ -681,32 +784,25 @@ function collectio_override_output_inkasso_sent_fn($html){
             // $creditorID = Metadata::get('collectio_creditor_id', $uid); 
             // $obj = new GetInvoiceRemainingAmountByClientAndInvoiceNumber();
             // $resp = $obj->getRemaining($row['invoiceid'], $creditorID);
-
-            $output .=  '<script>
-                $(function(){
-                    $.ajax({
-                        url: "/plugins/collectio/ajax/ajax.php",
-                        type: "GET",
-                        dataType: "JSON",
-                        data: {
-                            req: "get_status",
-                            hash: "'.$row['hash'].'"
-                        }
-                    })
-                    .done(function(response) {
-                       $("#collectio_remaining_response").html(response.response);
-                    });
-        
-                });
-            
-            </script>';
             
             $output .=  " 
                
-                <div class='mt-3 pl-2'><small><b>Status</b></small></div>
-                <div class='py-2 px-5 mt-1 rounded d-inline-block bg-warning' id='collectio_remaining_response'>
-                    henter status <i class='spinner-border spinner-border-sm'></i>
+                <div class='mt-3 pl-2'>
+                    <small class='text-muted d-block mb-1'><b>Status</b></small>
+                    <div class='d-flex flex-wrap align-items-center gap-2'>
+                        <div class='py-2 px-4 rounded badge badge-warning text-dark mb-2 mb-sm-0 d-none' id='collectio_remaining_response' data-collectio-hash='".htmlspecialchars($row['hash'], ENT_QUOTES)."'>
+                            <span class='status-text'></span>
+                        </div>
+                        <button type='button' class='btn btn-sm btn-outline-primary d-inline-flex align-items-center' id='collectio_load_status_btn' data-hash='".htmlspecialchars($row['hash'], ENT_QUOTES)."'>
+                            <i class='hio hio-refresh mr-1'></i><span>Hent status</span>
+                        </button>
+                    </div>
                 </div>
+                <style>
+                    .reminder-options-help-button {
+                       display: none !important;
+                    }
+                </style>
                 ";
             
         $output .=  "</div>";
@@ -752,8 +848,148 @@ function collectio_filter_more_options_in_create_company_fn($html){
 }
 
 
+// Register reminder event for external collection agency
+// This event sends cases to external collection service
+Filter::add_filter('reminder_register_event_types', function($types) {
+    $types[] = [
+        'event_key' => 'external_collection',
+        'event_name' => 'Automatisk oppfølging hos inkassobyrå',
+        'event_description' => 'Sender saken til eksternt inkassobyrå. VIKTIG: Kan ikke brukes hvis purring med gebyr er sendt (inkassobyrået aksepterer ikke saker med tidligere purregebyr).',
+        'event_category' => 'collection',
+        'handler_class' => 'PluginEventHandler',
+        'handler_method' => 'execute',
+        'rules' => [
+            'min_days_from_due' => 14,              // Minimum 14 days after due date
+            'max_occurrences' => 1,                 // Only once per invoice
+            'min_days_between_events' => 3,        // 14 days spacing
+            'blocks_after_events' => ['purring', 'inkasso'],   // CANNOT add if purring exists before (collection agency rule)
+            'blocks_future_events' => true,         // STOPS all future automated reminders
+            'requires_subscription' => false,
+            'service_name' => 'collector_fee',                 // External collection handled by third-party agency (pricing may vary)
+            'default_config' => ['event_key' => 'external_collection']
+        ],
+        'icon_class' => 'hio hio-building-office',
+        'color_class' => 'text-danger',
+        'is_system' => 0,
+        'plugin_source' => 'test_plugin',
+        'sort_order' => 100
+    ];
+    return $types;
+});
 
+// Add callback for when this event executes
+Filter::add_filter("reminder_execute_external_collection", function($data) {
+    $invoice_id = intval($data['invoice_id']);
+    $config = $data['config'] ?? [];
+    
+    if (empty($invoice_id)) {
+        return [
+            'success' => false,
+            'error' => 'Invalid invoice ID provided'
+        ];
+    }
+    
+    // Get invoice data
+    $invoice_res = q("SELECT * FROM invoice WHERE id = " . intval($invoice_id) . " LIMIT 1");
+    if ($invoice_res->num_rows == 0) {
+        return [
+            'success' => false,
+            'error' => 'Invoice not found'
+        ];
+    }
+    
+    $invoice = mfa($invoice_res);
+    $uid = $invoice['uid'];
+    
+    // Safety check: Verify user has accepted terms
+    $acceptedTerms = Metadata::get('collectio_terms', $uid);
+    if (empty($acceptedTerms)) {
+        return [
+            'success' => false,
+            'error' => 'Terms not accepted. Cannot send to external collection.'
+        ];
+    }
+    
+    // Safety check: Verify invoice is not already in collection
+    $inkassoStatus = Metadata::get('collectio_status_'.$invoice_id, $uid);
+    if (in_array($inkassoStatus, array('queued', 'processing', 'recall', 'completed'))) {
+        return [
+            'success' => false,
+            'error' => 'Invoice is already in collection process (status: '.$inkassoStatus.')'
+        ];
+    }
+    
+    // Check if case already exists
+    $existingCase = Metadata::get('collectio_case_'.$invoice_id, $uid);
+    if (!empty($existingCase)) {
+        return [
+            'success' => false,
+            'error' => 'Case already exists for this invoice (case: '.$existingCase.')'
+        ];
+    }
 
+    // check if theres a reminder invoice sent for this invoice that has been sent with a fee
+    // Collection agencies don't accept cases if a reminder with fee has already been sent
+    // Check if reminder_fee_count > 0 on the original invoice
+    if ($invoice['reminder_fee_count'] > 0) {
+        return [
+            'success' => false,
+            'error' => 'Kan ikke sende saken til ekstern oppfølging da det allerede er sendt en purring med gebyr for denne fakturaen. Inkassobyrået aksepterer ikke saker hvor purring med gebyr allerede er sendt.'
+        ];
+    }
+    
+    // Also check if there are any reminder invoices (type=3) with fees for this invoice
+    $reminder_check = q("SELECT id, reminder_fee_count FROM invoice 
+                         WHERE refid = " . intval($invoice_id) . " 
+                         AND type = 3 
+                         AND uid = " . intval($uid) . " 
+                         AND reminder_fee_count > 0 
+                         LIMIT 1");
+    if ($reminder_check->num_rows > 0) {
+        return [
+            'success' => false,
+            'error' => 'Kan ikke sende saken til ekstern oppfølging da det allerede er sendt en purring med gebyr for denne fakturaen. Inkassobyrået aksepterer ikke saker hvor purring med gebyr allerede er sendt.'
+        ];
+    }
+
+    
+    // Create case for invoice using the existing function
+    $result = collectio_create_case_for_invoice($invoice_id, $uid);
+    
+    // Handle the result
+    if ($result['status'] == 'ok') {
+        // Case was successfully created
+        $caseNumber = $result['caseID'] ?? null;
+        
+        // Update followup stage to 3 (completed, followup was submitted to partner)
+        // This matches the behavior in CollectioInvoiceProcess::findInvoicesForCollection()
+        Metadata::set('collectio_followup_'.$invoice_id, 3, $uid);
+        
+        // Log the action (already done in collectio_create_case_for_invoice, but adding reminder context)
+        \LogInvoiceActions::add($uid, $invoice_id, 'Reminder plan: Sent to external collection', 'Case: '.$caseNumber);
+        
+        return [
+            'success' => true,
+            'external_case_id' => $caseNumber,
+            'message' => $result['message'] ?? 'Saken har blitt sendt til ekstern oppfølging.',
+            'case_number' => $caseNumber
+        ];
+    } else {
+        // Error occurred during case creation
+        $errorMessage = $result['message'] ?? 'Unknown error occurred while creating case';
+        
+        // Log the error
+        debug("Collectio plugin: reminder_execute_external_collection", "Failed to create case for invoice {$invoice_id}: {$errorMessage}");
+        
+        \LogInvoiceActions::add($uid, $invoice_id, 'Reminder plan: Sent to external collection', 'Failed');
+
+        return [
+            'success' => false,
+            'error' => $errorMessage,
+            'message' => $errorMessage
+        ];
+    }
+});
 
 /* FUNCTIONS */
 
@@ -852,8 +1088,8 @@ function collectio_create_creditor(int $uid){
         ";
 
         // send email 
-        send_mail("collectio", CONF_collectio_email, "Ny kreditor #".$creditorID, $body);
-        send_mail("collectio", CONF_collectio_email_contact, "Ny kreditor #".$creditorID." (kopi)", $body);
+        send_mail("collectio", CONF_collectio_email, "Ny kreditor #".$creditorID. " hos nettgiro.no", $body);
+        send_mail("collectio", CONF_collectio_email_contact, "Ny kreditor #".$creditorID." hos nettgiro.no (kopi)", $body);
 
         return $creditorID;  
     }else{
@@ -1228,3 +1464,6 @@ function collectio_completed_case_number_to_text($number) {
         return 'Ukjent status ('.$number.')';
     }
 }
+
+
+

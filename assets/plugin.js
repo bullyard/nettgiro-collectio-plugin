@@ -1,6 +1,6 @@
 $(function() {
     
-    $('.collectio_accept_terms').on('click', function(event) {
+    $('body').on('click', '.collectio_accept_terms', function(event) {
         event.preventDefault();
 
         $('.modal').modal('hide');
@@ -72,7 +72,7 @@ $(function() {
 
             hide_loader();
             if (response.status == "ok"){
-                $.fn.alert(response.message, "Vellykket");
+                $.fn.alert(response.message, "Vellykket", function(){window.location.reload()});
             }else if (response.status == "error"){
                 $.fn.alert(response.error, "Misslykket");
             }else if (response.internal){
@@ -134,6 +134,59 @@ $(function() {
             //top.location.href = location.href;
         });
     });
+
+
+    $("body").on("click", "#cancel_collection_in_invoice_page", function(event){
+        event.preventDefault();
+        $.fn.confirm("Vil du avbryte automatisk oppfølging av saken?", (ans) => {
+            if (ans) {
+                $.ajax({
+                    url: "/plugins/collectio/ajax/ajax.php",
+                    type: "GET",
+                    dataType: "JSON",
+                    data: {
+                        req: "stop_case",
+                        hash: $(this).data('hash')
+                    }
+                })
+                .done(function(response) {
+                    top.location.href = location.href;
+                });
+            }
+        });   
+    });
+
+    // Load Collectio status when button is clicked
+    $('body').on('click', '#collectio_load_status_btn', function() {
+        var $btn = $(this);
+        var hash = $btn.data('hash');
+        var $statusElement = $('#collectio_remaining_response');
+
+        if (!hash) {
+            hash = $statusElement.attr('data-collectio-hash');
+        }
+
+        if (hash) {
+            // remove the trigger button after first click and show status box
+            $btn.remove();
+            $statusElement.removeClass('d-none').html('<span class="d-inline-flex align-items-center"><i class="spinner-border spinner-border-sm mr-2"></i>Henter status...</span>');
+
+            $.ajax({
+                url: '/plugins/collectio/ajax/ajax.php',
+                type: 'GET',
+                dataType: 'JSON',
+                data: {
+                    req: 'get_status',
+                    hash: hash
+                }
+            }).done(function(response) {
+                $statusElement.html(response.response);
+            }).fail(function() {
+                $statusElement.html('<span class="text-danger d-inline-flex align-items-center"><i class="hio hio-x-circle mr-1"></i>Kunne ikke hente status. Prøv igjen senere.</span>');
+            });
+        }
+    });
+
     
 });
 
