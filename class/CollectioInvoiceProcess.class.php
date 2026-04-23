@@ -338,22 +338,34 @@ class CollectioInvoiceProcess {
         echo "<b>".__FUNCTION__."</b><br>\n";
 
         foreach ($rows as $invoice) {
+            $invoiceID = intval($invoice['id']);
+            $invoiceUID = intval($invoice['uid']);
             
             // get result
-            $creditorID =  Metadata::get('collectio_creditor_id', $invoice['uid']); 
+            $creditorID =  Metadata::get('collectio_creditor_id', $invoiceUID); 
             
             $apiResult = $this->getCaseStatus($invoice['caseNO']);
 
             // check if the remaining value is zero
             if ($apiResult['BalanceCapital'] === (float) 0){
                 // invoice har been collected
-                
-                // create a payment row for invoice, and set comment that the invoice has been collected
-                $invPay = new Bullyard\Invoice\InvoicePayment($invoice['uid'], $invoice['id'], true);
-		        $response = $invPay->register_pay("", "", (float) $apiResult['InitialCapital'], date('d.m.Y', time()), "Sak løst via automatisk oppfølging.");
+                $paymentComment = "Sak løst via automatisk oppfølging.";
+                $hasRegisteredPayments = $this->invoiceHasRegisteredPayments((int) $invoice['id']);
+
+                if ($hasRegisteredPayments) {
+                    // Already paid in Nettgiro: add a 0-value row only for history/log context.
+                    $mysqlTime = date('Y-m-d H:i:s');
+                    self::$db->q("INSERT INTO payments (refid, uid, value, datestamp, comment) VALUES ('".$invoiceID."', '".$invoiceUID."', '0', '".$mysqlTime."', '".safe_mysql($paymentComment)."')");
+                    \LogInvoiceActions::add($invoiceUID, $invoiceID, 'Payment registered', currency_nor2(0));
+                    \update_invoice_status($invoiceID);
+                } else {
+                    // No prior payment in Nettgiro: register the collected amount from Collectio.
+                    $invPay = new Bullyard\Invoice\InvoicePayment($invoiceUID, $invoiceID, true);
+		            $response = $invPay->register_pay("", "", (float) $apiResult['InitialCapital'], date('d.m.Y', time()), $paymentComment);
+                }
 
                 //send an email to user.
-                $clientInfo = get_client_for_sending($invoice['recipient'], $invoice['uid']);
+                $clientInfo = get_client_for_sending($invoice['recipient'], $invoiceUID);
                 $html = "<div style='-ms-text-size-adjust: none; -webkit-text-size-adjust: none; font-size: 15px; font-weight: 300; line-height: 24px; padding: 10px; text-size-adjust: none;'>
                     Vi ønsker å informere deg om at oppfølgingssaken med id <b>".$invoice['caseNO']."</b> for faktura <b>#".$invoice['invoiceid']."</b> til <b>".htmlentities($clientInfo['clientname'])."</b> skal nå være løst. Fakturaen er nå registrert som betalt i arkivet ditt hos oss.
                     <br/><br/>
@@ -366,9 +378,9 @@ class CollectioInvoiceProcess {
                     ".CONF_sitename."
                 </div>";
 
-                $userinfo = Bullyard\Invoice\Invoice::get_user($invoice['uid']); // Get company information
+                $userinfo = Bullyard\Invoice\Invoice::get_user($invoiceUID); // Get company information
                 try {
-                    $mailer = new \TemplateMailer($invoice['uid'], 'company', "mail_template_empty", true);
+                    $mailer = new \TemplateMailer($invoiceUID, 'company', "mail_template_empty", true);
                     $mailer->
                     set('PRETITLE', "")->
                     set('TITLE', "Krav på faktura #".$invoice['invoiceid']." er avsluttet")->
@@ -383,10 +395,10 @@ class CollectioInvoiceProcess {
                 }
 
                 // update invoice row to payed, and change collectio_status_* metadata so it wont run again.
-                Metadata::set('collectio_status_'.$invoice['id'], 'completed', $invoice['uid']);
+                Metadata::set('collectio_status_'.$invoiceID, 'completed', $invoiceUID);
                 echo "Successfully updated case ".$invoice['caseNO']." invoice to completed, invoice id = ".$invoice['id']." hash = ".$invoice['hash']." <br>";
 
-                \LogInvoiceActions::add($invoice['uid'], $invoice['id'], 'Collectio case completed', '');
+                \LogInvoiceActions::add($invoiceUID, $invoiceID, 'Collectio case completed', '');
 
             }else{
                 // nothing has happened yet
@@ -432,6 +444,12 @@ class CollectioInvoiceProcess {
                     AND m.meta_key IS NOT NULL
                     ".$addSql."
             GROUP BY i.id";
+    }
+
+    private function invoiceHasRegisteredPayments(int $invoiceID) : bool
+    {
+        $result = self::$db->q("SELECT id FROM payments WHERE refid = '".intval($invoiceID)."' AND status = 1 AND value < 0 LIMIT 1");
+        return $result && $result->num_rows > 0;
     }
     
   }

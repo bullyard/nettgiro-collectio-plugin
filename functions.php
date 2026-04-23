@@ -319,6 +319,7 @@ function collectio_reminder_plan_assigned_resumed_fn($invoice_id, $plan_id = nul
 			if ($collectio_status === 'queued') {
 				// Delete the queued collectio status metadata
 				Metadata::delete('collectio_status_' . $invoice_id, $uid);
+                Metadata::delete('collectio_followup_' . $invoice_id, $uid);
 			}
 
             //debug("Collectio plugin: reminder_plan_assigned_resumed", "Collectio plugin: reminder plan assigned or resumed for invoice ".$invoice_id.", uid: ".$uid.", plan_id: ".$plan_id.", assigned_by: ".$assigned_by, true, 3);

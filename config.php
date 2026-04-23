@@ -30,4 +30,5 @@ if (CONF_is_dev){
     define('PREDATOR_AUTH_CLIENTNO', '002662');
     define('PREDATOR_TEMPLATE_CREDITOR', '002792');
     define('PREDATOR_TEMPLATE_CREDITOR_ALT', '002793');
+    define('PREDATOR_BIND_IP', '172.31.34.160'); // Route via 13.49.101.30 (clean IP, avoids blacklisted primary)
 }

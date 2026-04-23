@@ -3,21 +3,24 @@ $(function() {
     $('body').on('click', '.collectio_accept_terms', function(event) {
         event.preventDefault();
 
-        $('.modal').modal('hide');
-
-		$.ajax({
-				url: '/plugins/collectio/ajax/modal_dialog.php',
-				type: 'GET',
-				dataType: 'JSON',
-				data: {
-					ReqDialog: 'plugin_show_terms'
-				}
-			})
-			.done(function(response) {
-				$.fn.dialogue({
+        // Store reference to current modal
+        var $currentModal = $(this).closest('.modal');
+        
+        // Function to show terms dialog
+        function showTermsDialog() {
+            $.ajax({
+                url: '/plugins/collectio/ajax/modal_dialog.php',
+                type: 'GET',
+                dataType: 'JSON',
+                data: {
+                    ReqDialog: 'plugin_show_terms'
+                }
+            })
+            .done(function(response) {
+                $.fn.dialogue({
                     title: response.title,
                     content: response.html,
-                    large:true,
+                    large: true,
                     closeIcon: true,
                     buttons: [{
                             text: response.button,
@@ -30,7 +33,6 @@ $(function() {
                                     collectio_accept_terms();
                                 } else {
                                     do_tip_global('#confirmAccountCreationContainer label', 'Du må bekrefte før du kan fullføre registreringen.', 'top', '.modal');
-
                                 }
 
                             }
@@ -44,9 +46,19 @@ $(function() {
                         }
                     ]
                 });
-			});
-
+            });
+        }
         
+        // If inside a modal, wait for it to hide before showing new one
+        if ($currentModal.length) {
+            $currentModal.one('hidden.bs.modal', function() {
+                showTermsDialog();
+            });
+            $currentModal.modal('hide');
+        } else {
+            // No current modal, just show the terms dialog
+            showTermsDialog();
+        }
     });
 
     $('#collectionService:disabled + .toggle').on('click', function(event) {
@@ -95,7 +107,7 @@ $(function() {
         }else{
             $('#collectio_show_price').hide();
         }
-    });
+    }); 
 
     $('body').on('click', '#btnToggleCollection', function(event) {
         event.preventDefault();
