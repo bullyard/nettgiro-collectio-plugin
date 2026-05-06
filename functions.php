@@ -1238,6 +1238,421 @@ function collectio_filter_add_admin_menu_element_2_fn($empty){
     </li>';
 }
 
+/* Admin cleanup page: locate + remove inconsistent collectio_* metadata */
+Pages::register_page('collectio_cleanup', $_SERVER['DOCUMENT_ROOT'].'/plugins/collectio/pages/cleanup.php');
+
+\Filter::add_filter('filter_add_admin_menu_element', 'collectio_filter_add_admin_menu_element_cleanup_fn');
+function collectio_filter_add_admin_menu_element_cleanup_fn($empty){
+    return $empty.'
+    <div class="dropdown-divider"></div>
+    <li>
+        <a class="dropdown-item" href="/?go=collectio_cleanup">
+            <i class="hio hio-wrench-screwdriver" aria-hidden="true"></i>&nbsp;COLLECTIO CLEANUP
+        </a>
+    </li>';
+}
+
+/**
+ * Supported cleanup categories.
+ */
+function collectio_cleanup_categories() : array
+{
+    return [
+        'canceled_no_case',
+        'stuck_queued_no_case',
+        'paid_queued',
+        'serious_no_case',
+        'orphan_invoice_deleted',
+        'orphan_followup',
+    ];
+}
+
+/**
+ * Safety window (in days) before a `queued` invoice without a case number is
+ * considered truly "stuck" rather than just waiting for cron submission.
+ * Set to 2× the submission deadline so we never touch pending work.
+ */
+function collectio_cleanup_stuck_days() : int
+{
+    return max(28, (int) CONF_collectio_days_before_deadline * 2);
+}
+
+/**
+ * Build the common FROM + JOIN expression used across cleanup queries that are
+ * rooted in `collectio_status_*` metadata. The SELECT clause is the caller's
+ * responsibility.
+ *
+ * Columns exposed for use in WHERE:
+ *   ms.uid, ms.meta_data (status), ms.datestamp
+ *   mc.meta_data AS case_no        (NULL when no case number exists)
+ *   mf.meta_data AS followup_stage (NULL when no followup metadata exists)
+ *   i.id, i.status, i.last_value, i.duedate  (NULL when the invoice row is gone)
+ */
+function collectio_cleanup_status_join_sql() : string
+{
+    return "
+        FROM metadata ms
+        LEFT JOIN metadata mc
+            ON mc.uid = ms.uid
+           AND mc.meta_key = CONCAT('collectio_case_', CAST(SUBSTRING(ms.meta_key, 18) AS UNSIGNED))
+        LEFT JOIN metadata mf
+            ON mf.uid = ms.uid
+           AND mf.meta_key = CONCAT('collectio_followup_', CAST(SUBSTRING(ms.meta_key, 18) AS UNSIGNED))
+        LEFT JOIN invoice i
+            ON i.id = CAST(SUBSTRING(ms.meta_key, 18) AS UNSIGNED)
+           AND i.uid = ms.uid
+        WHERE ms.meta_key LIKE 'collectio\\_status\\_%'
+    ";
+}
+
+/**
+ * Return the WHERE-clause fragment that isolates a single cleanup category.
+ * Assumes the caller is joining via `collectio_cleanup_status_join_sql()`.
+ */
+function collectio_cleanup_category_predicate(string $category) : string
+{
+    $stuckDays = collectio_cleanup_stuck_days();
+
+    switch ($category) {
+        case 'canceled_no_case':
+            // Explicitly canceled, never reached Collectio. Always safe.
+            return "
+                AND ms.meta_data = 'canceled'
+                AND mc.meta_data IS NULL
+                AND i.id IS NOT NULL
+            ";
+
+        case 'stuck_queued_no_case':
+            // `queued` without case number only counts as stuck when:
+            //   - the alert email was already sent (followup stage >= 2), meaning
+            //     the cron has had at least one opportunity to submit the case,
+            //   - AND the due date is more than 2× the submission deadline in the
+            //     past, so we are well outside the normal waiting window,
+            //   - AND the invoice is not already paid/fully credited.
+            // This explicitly EXCLUDES invoices that are legitimately queued and
+            // waiting for their deadline window to pass.
+            return "
+                AND ms.meta_data = 'queued'
+                AND mc.meta_data IS NULL
+                AND i.id IS NOT NULL
+                AND i.duedate < DATE_SUB(NOW(), INTERVAL $stuckDays DAY)
+                AND CAST(mf.meta_data AS UNSIGNED) >= 2
+                AND i.status <> 'payed'
+                AND i.last_value > 0
+            ";
+
+        case 'paid_queued':
+            return "
+                AND ms.meta_data = 'queued'
+                AND i.id IS NOT NULL
+                AND (i.status = 'payed' OR i.last_value <= 0)
+            ";
+
+        case 'serious_no_case':
+            return "
+                AND ms.meta_data IN ('processing', 'completed', 'recall')
+                AND mc.meta_data IS NULL
+                AND i.id IS NOT NULL
+            ";
+
+        case 'orphan_invoice_deleted':
+            return " AND i.id IS NULL ";
+    }
+    return " AND 1=0 "; // unknown category → match nothing
+}
+
+/**
+ * Return counts for every cleanup category. Executed as ONE aggregate query
+ * for the status-rooted categories plus ONE query for orphan followups, so a
+ * 90K-row metadata table is scanned only twice (not per-category).
+ */
+function collectio_cleanup_get_counts() : array
+{
+    $db        = \DB::getInstance();
+    $stuckDays = collectio_cleanup_stuck_days();
+
+    $sql = "
+        SELECT
+          SUM(CASE WHEN ms.meta_data = 'canceled'
+                    AND mc.meta_data IS NULL
+                    AND i.id IS NOT NULL
+              THEN 1 ELSE 0 END) AS canceled_no_case,
+          SUM(CASE WHEN ms.meta_data = 'queued'
+                    AND mc.meta_data IS NULL
+                    AND i.id IS NOT NULL
+                    AND i.duedate < DATE_SUB(NOW(), INTERVAL $stuckDays DAY)
+                    AND CAST(mf.meta_data AS UNSIGNED) >= 2
+                    AND i.status <> 'payed'
+                    AND i.last_value > 0
+              THEN 1 ELSE 0 END) AS stuck_queued_no_case,
+          SUM(CASE WHEN ms.meta_data = 'queued'
+                    AND i.id IS NOT NULL
+                    AND (i.status = 'payed' OR i.last_value <= 0)
+              THEN 1 ELSE 0 END) AS paid_queued,
+          SUM(CASE WHEN ms.meta_data IN ('processing','completed','recall')
+                    AND mc.meta_data IS NULL
+                    AND i.id IS NOT NULL
+              THEN 1 ELSE 0 END) AS serious_no_case,
+          SUM(CASE WHEN i.id IS NULL
+              THEN 1 ELSE 0 END) AS orphan_invoice_deleted
+        ".collectio_cleanup_status_join_sql();
+
+    $res  = $db->q($sql);
+    $row  = $db->mfa($res) ?: [];
+    $counts = [
+        'canceled_no_case'       => (int)($row['canceled_no_case'] ?? 0),
+        'stuck_queued_no_case'   => (int)($row['stuck_queued_no_case'] ?? 0),
+        'paid_queued'            => (int)($row['paid_queued'] ?? 0),
+        'serious_no_case'        => (int)($row['serious_no_case'] ?? 0),
+        'orphan_invoice_deleted' => (int)($row['orphan_invoice_deleted'] ?? 0),
+        'orphan_followup'        => 0,
+    ];
+
+    $orphanRes = $db->q("
+        SELECT COUNT(*) AS cnt
+        FROM metadata mf
+        LEFT JOIN metadata ms
+            ON ms.uid = mf.uid
+           AND ms.meta_key = CONCAT('collectio_status_', CAST(SUBSTRING(mf.meta_key, 20) AS UNSIGNED))
+        WHERE mf.meta_key LIKE 'collectio\\_followup\\_%'
+          AND ms.meta_key IS NULL
+    ");
+    $orphanRow = $db->mfa($orphanRes) ?: [];
+    $counts['orphan_followup'] = (int)($orphanRow['cnt'] ?? 0);
+
+    return $counts;
+}
+
+/**
+ * Pipeline health statistics — informational breakdown of the Collectio
+ * metadata population (NOT cleanup candidates). Used at the top of the
+ * admin cleanup page to give context before any destructive action.
+ *
+ * Runs a single aggregate query over the same joined data as the counts
+ * helper, so it's cheap to call alongside it.
+ *
+ * Returns:
+ *  - status.{queued,processing,completed,canceled,recall}: count per status
+ *  - queued_total:            total status=queued
+ *  - followup.{fu0..fu3,null}: breakdown of queued by followup stage
+ *  - window.waiting:          queued inside the pre-deadline window (safe, legitimate)
+ *  - window.ready_to_submit:  queued past the deadline but not yet "stuck"
+ *  - window.stuck:            queued beyond the hard safety threshold
+ *    (this is the same bucket the cleanup targets via stuck_queued_no_case,
+ *    but counted here including rows that still have a case number, so the
+ *    two numbers can differ)
+ */
+function collectio_cleanup_get_pipeline_stats() : array
+{
+    $db         = \DB::getInstance();
+    $deadline   = (int) CONF_collectio_days_before_deadline;
+    $stuckDays  = collectio_cleanup_stuck_days();
+
+    $sql = "
+        SELECT
+            SUM(CASE WHEN ms.meta_data = 'queued'     THEN 1 ELSE 0 END) AS s_queued,
+            SUM(CASE WHEN ms.meta_data = 'processing' THEN 1 ELSE 0 END) AS s_processing,
+            SUM(CASE WHEN ms.meta_data = 'completed'  THEN 1 ELSE 0 END) AS s_completed,
+            SUM(CASE WHEN ms.meta_data = 'canceled'   THEN 1 ELSE 0 END) AS s_canceled,
+            SUM(CASE WHEN ms.meta_data = 'recall'     THEN 1 ELSE 0 END) AS s_recall,
+
+            SUM(CASE WHEN ms.meta_data = 'queued' AND CAST(mf.meta_data AS UNSIGNED) = 0 THEN 1 ELSE 0 END) AS fu0,
+            SUM(CASE WHEN ms.meta_data = 'queued' AND CAST(mf.meta_data AS UNSIGNED) = 1 THEN 1 ELSE 0 END) AS fu1,
+            SUM(CASE WHEN ms.meta_data = 'queued' AND CAST(mf.meta_data AS UNSIGNED) = 2 THEN 1 ELSE 0 END) AS fu2,
+            SUM(CASE WHEN ms.meta_data = 'queued' AND CAST(mf.meta_data AS UNSIGNED) = 3 THEN 1 ELSE 0 END) AS fu3,
+            SUM(CASE WHEN ms.meta_data = 'queued' AND mf.meta_data IS NULL              THEN 1 ELSE 0 END) AS fu_null,
+
+            SUM(CASE WHEN ms.meta_data = 'queued'
+                      AND i.id IS NOT NULL
+                      AND (i.duedate IS NULL OR i.duedate >= DATE_SUB(NOW(), INTERVAL $deadline DAY))
+                 THEN 1 ELSE 0 END) AS w_waiting,
+            SUM(CASE WHEN ms.meta_data = 'queued'
+                      AND i.id IS NOT NULL
+                      AND i.duedate <  DATE_SUB(NOW(), INTERVAL $deadline DAY)
+                      AND i.duedate >= DATE_SUB(NOW(), INTERVAL $stuckDays DAY)
+                 THEN 1 ELSE 0 END) AS w_ready,
+            SUM(CASE WHEN ms.meta_data = 'queued'
+                      AND i.id IS NOT NULL
+                      AND i.duedate <  DATE_SUB(NOW(), INTERVAL $stuckDays DAY)
+                 THEN 1 ELSE 0 END) AS w_stuck
+        ".collectio_cleanup_status_join_sql();
+
+    $row = $db->mfa($db->q($sql)) ?: [];
+
+    return [
+        'status' => [
+            'queued'     => (int)($row['s_queued']     ?? 0),
+            'processing' => (int)($row['s_processing'] ?? 0),
+            'completed'  => (int)($row['s_completed']  ?? 0),
+            'canceled'   => (int)($row['s_canceled']   ?? 0),
+            'recall'     => (int)($row['s_recall']     ?? 0),
+        ],
+        'queued_total' => (int)($row['s_queued'] ?? 0),
+        'followup' => [
+            'fu0'     => (int)($row['fu0']     ?? 0),
+            'fu1'     => (int)($row['fu1']     ?? 0),
+            'fu2'     => (int)($row['fu2']     ?? 0),
+            'fu3'     => (int)($row['fu3']     ?? 0),
+            'fu_null' => (int)($row['fu_null'] ?? 0),
+        ],
+        'window' => [
+            'waiting'          => (int)($row['w_waiting'] ?? 0),
+            'ready_to_submit'  => (int)($row['w_ready']   ?? 0),
+            'stuck'            => (int)($row['w_stuck']   ?? 0),
+        ],
+        'config' => [
+            'deadline_days' => $deadline,
+            'stuck_days'    => $stuckDays,
+        ],
+    ];
+}
+
+/**
+ * Return paginated (uid, invoice_id) pairs for a category. When
+ * $includeDisplayData is true the rows also include columns needed for the
+ * drill-down UI (invoice number, company, amount, etc).
+ */
+function collectio_cleanup_get_targets(string $category, int $limit = 500, int $offset = 0, bool $includeDisplayData = false) : array
+{
+    if (!in_array($category, collectio_cleanup_categories(), true)) return [];
+
+    $db     = \DB::getInstance();
+    $limit  = max(1, min(5000, $limit));
+    $offset = max(0, $offset);
+
+    if ($category === 'orphan_followup') {
+        $select = $includeDisplayData
+            ? "mf.uid, CAST(SUBSTRING(mf.meta_key, 20) AS UNSIGNED) AS invoice_id,
+               mf.meta_data AS followup_stage, mf.datestamp AS status_datestamp,
+               u.name AS company_name, u.email AS company_email,
+               NULL AS invoiceid, NULL AS invoice_status, NULL AS value, NULL AS last_value,
+               NULL AS duedate, NULL AS hash, NULL AS case_no, 'orphan_followup' AS status"
+            : "mf.uid, CAST(SUBSTRING(mf.meta_key, 20) AS UNSIGNED) AS invoice_id";
+
+        $sql = "
+            SELECT $select
+            FROM metadata mf
+            LEFT JOIN metadata ms
+                ON ms.uid = mf.uid
+               AND ms.meta_key = CONCAT('collectio_status_', CAST(SUBSTRING(mf.meta_key, 20) AS UNSIGNED))
+            ".($includeDisplayData ? "LEFT JOIN users u ON u.uid = mf.uid" : "")."
+            WHERE mf.meta_key LIKE 'collectio\\_followup\\_%'
+              AND ms.meta_key IS NULL
+            ORDER BY mf.datestamp DESC
+            LIMIT $limit OFFSET $offset
+        ";
+
+        $res  = $db->q($sql);
+        $rows = [];
+        while ($r = $db->mfa($res)) $rows[] = $r;
+        return $rows;
+    }
+
+    if ($includeDisplayData) {
+        $sql = "
+            SELECT
+                CAST(SUBSTRING(ms.meta_key, 18) AS UNSIGNED) AS invoice_id,
+                ms.uid,
+                ms.meta_data AS status,
+                ms.datestamp AS status_datestamp,
+                mc.meta_data AS case_no,
+                mf.meta_data AS followup_stage,
+                i.invoiceid, i.status AS invoice_status, i.value, i.last_value, i.duedate, i.hash,
+                u.name AS company_name, u.email AS company_email
+            FROM metadata ms
+            LEFT JOIN metadata mc
+                ON mc.uid = ms.uid
+               AND mc.meta_key = CONCAT('collectio_case_', CAST(SUBSTRING(ms.meta_key, 18) AS UNSIGNED))
+            LEFT JOIN metadata mf
+                ON mf.uid = ms.uid
+               AND mf.meta_key = CONCAT('collectio_followup_', CAST(SUBSTRING(ms.meta_key, 18) AS UNSIGNED))
+            LEFT JOIN invoice i
+                ON i.id = CAST(SUBSTRING(ms.meta_key, 18) AS UNSIGNED)
+               AND i.uid = ms.uid
+            LEFT JOIN users u ON u.uid = ms.uid
+            WHERE ms.meta_key LIKE 'collectio\\_status\\_%'
+            ".collectio_cleanup_category_predicate($category)."
+            ORDER BY ms.datestamp DESC
+            LIMIT $limit OFFSET $offset
+        ";
+    } else {
+        $sql = "
+            SELECT ms.uid, CAST(SUBSTRING(ms.meta_key, 18) AS UNSIGNED) AS invoice_id
+            ".collectio_cleanup_status_join_sql()."
+            ".collectio_cleanup_category_predicate($category)."
+            ORDER BY ms.datestamp DESC
+            LIMIT $limit OFFSET $offset
+        ";
+    }
+
+    $res  = $db->q($sql);
+    $rows = [];
+    while ($r = $db->mfa($res)) $rows[] = $r;
+    return $rows;
+}
+
+/**
+ * Delete all Collectio metadata keys (status/followup/case) for a given list
+ * of (uid, invoice_id) targets in a SINGLE SQL roundtrip using row-constructor
+ * IN lookup against the unique (uid, meta_key) index.
+ *
+ * Returns the number of metadata rows actually deleted.
+ */
+function collectio_cleanup_delete_batch(array $targets, bool $onlyFollowup = false) : int
+{
+    if (empty($targets)) return 0;
+
+    $tuples = [];
+    foreach ($targets as $t) {
+        $uid = (int)($t['uid'] ?? 0);
+        $iid = (int)($t['invoice_id'] ?? 0);
+        if ($uid <= 0 || $iid <= 0) continue;
+
+        if ($onlyFollowup) {
+            $tuples[] = "($uid,'collectio_followup_$iid')";
+        } else {
+            $tuples[] = "($uid,'collectio_status_$iid')";
+            $tuples[] = "($uid,'collectio_followup_$iid')";
+            $tuples[] = "($uid,'collectio_case_$iid')";
+        }
+    }
+    if (empty($tuples)) return 0;
+
+    $db = \DB::getInstance();
+    $db->q("DELETE FROM metadata WHERE (uid, meta_key) IN (".implode(',', $tuples).")");
+
+    return (int)$db->affected_rows();
+}
+
+/* Per-foretak page: list all collection cases for the active company */
+Pages::register_page('collectio_my_cases', $_SERVER['DOCUMENT_ROOT'].'/plugins/collectio/pages/my_cases.php');
+
+\Filter::add_filter('filter_add_company_menu_element', 'collectio_filter_add_company_menu_element_fn');
+function collectio_filter_add_company_menu_element_fn($html){
+    $slug = \Slug::get_slug();
+    return $html.'
+    <div class="dropdown-divider"></div>
+    <li>
+        <a class="dropdown-item" href="'.$slug.'?go=collectio_my_cases">
+            <i class="hio hio-shield-check" aria-hidden="true"></i>&nbsp;Innkrevingssaker
+        </a>
+    </li>';
+}
+
+\Filter::add_filter('filter_add_company_menu_element_mobile', 'collectio_filter_add_company_menu_element_mobile_fn');
+function collectio_filter_add_company_menu_element_mobile_fn($html){
+    $slug = \Slug::get_slug();
+    global $curpage;
+    $active = ($curpage === 'collectio_my_cases') ? 'active' : '';
+    return $html.'
+    <li class="menu-item '.$active.'">
+        <a href="'.$slug.'?go=collectio_my_cases" class="menu-link">
+            <i class="hio hio-shield-check"></i>
+            <span>Innkrevingssaker</span>
+        </a>
+    </li>';
+}
+
 
 function collectio_completed_case_number_to_text($number) {
     $mapping = [
